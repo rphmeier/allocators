@@ -23,3 +23,5 @@ alloc.scope(|| {
 let my_int = alloc.allocate(23);
 println!("My int: {}", *my_int);
 ```
+
+Disclaimer: this crate leans heavily on unsafe code and nightly features and should not be used in production as it stands.
