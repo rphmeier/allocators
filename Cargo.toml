@@ -1,0 +1,4 @@
+[package]
+name = "allocators"
+version = "0.1.0"
+authors = ["rphmeier <rphmeier@gmail.com>"]
