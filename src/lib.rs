@@ -1,4 +1,4 @@
-#![feature(alloc, heap_api, ptr_as_ref, test)]
+#![feature(alloc, heap_api, ptr_as_ref)]
 
 use std::mem;
 use std::ops::{Deref, DerefMut};
@@ -128,97 +128,18 @@ impl Drop for ScopedAllocator {
 }
 
 #[test]
-fn thing() {
+fn it_works() {
     struct Bomb(i32);
     impl Drop for Bomb {
         fn drop(&mut self) { println!("Boom! {}", self.0) }
     }
 
     let alloc = ScopedAllocator::new(64);
-    let my_int = alloc.allocate(23).ok().unwrap();
+    let _my_int = alloc.allocate(23).ok().unwrap();
     alloc.scope(|| {
         //gets dropped when this scope ends.
         let _bomb = {
             alloc.allocate(Bomb(1)).ok().unwrap()
         };
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    extern crate test;
-
-    #[bench]
-    fn scoped_100mb(b: &mut test::Bencher) {
-        b.iter(|| {
-            // this only should take about 100MB, allocate a little extra anyway.
-            let alloc = ScopedAllocator::new(105 * (1 << 20));
-            let mut small = Vec::new();
-            let mut medium = Vec::new();
-            let mut large = Vec::new();
-
-            // allocate
-
-            // 10k * 16 bytes
-            for _ in 0..10000 {
-
-                unsafe { small.push(alloc.allocate_raw(16, 1).ok().unwrap()); }
-            }
-
-            // 1k * 256 bytes
-            for _ in 0..1000 {
-                unsafe { medium.push(alloc.allocate_raw(256, 1).ok().unwrap()); }
-            }
-
-            // 50 * 2MB
-            for _ in 0..50 {
-                unsafe { large.push(alloc.allocate_raw(1 << 21, 1).ok().unwrap()); }
-            }
-
-            // destructors handle cleanup
-            test::black_box((small, medium, large));
-        });
-    }
-
-    #[bench]
-    fn alloc_100mb(b: &mut test::Bencher) {
-        b.iter(|| {
-            use ::alloc::heap;
-            let mut small = Vec::new();
-            let mut medium = Vec::new();
-            let mut large = Vec::new();
-
-            // allocation
-
-            // 10k * 16 bytes
-            for _ in 0..10000 {
-                unsafe { small.push(heap::allocate(16, 1)); }
-            }
-
-            // 1k * 256 bytes
-            for _ in 0..1000 {
-                unsafe { medium.push(heap::allocate(256, 1)); }
-            }
-
-            // 50 * 2MB
-            for _ in 0..50 {
-                unsafe { large.push(heap::allocate(1 << 21, 1)); }
-            }
-
-            // cleanup.
-
-            for ptr in small {
-                unsafe { heap::deallocate(ptr, 16, 1); }
-            }
-
-            for ptr in medium {
-                unsafe { heap::deallocate(ptr, 256, 1); }
-            }
-
-            for ptr in large {
-                unsafe { heap::deallocate(ptr, 1 << 21, 1); }
-            }
-        });
-    }
 }
