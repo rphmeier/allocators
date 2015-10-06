@@ -1,6 +1,6 @@
 [package]
 name = "scoped_allocator"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["rphmeier <rphmeier@gmail.com>"]
 description = "A scoped linear allocator."
 license = "MIT"
