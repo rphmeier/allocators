@@ -23,11 +23,25 @@
 //! let my_int = alloc.allocate(23).ok().unwrap();
 //! println!("My int: {}", *my_int);
 //! ```
-#![feature(alloc, heap_api, ptr_as_ref)]
 
+#![feature(
+    alloc, 
+    coerce_unsized,
+    core_intrinsics,
+    heap_api,
+    ptr_as_ref,
+    raw,
+    unsize
+)]
+
+use std::any::Any;
+use std::borrow::{Borrow, BorrowMut};
 use std::cell::Cell;
+use std::intrinsics::drop_in_place;
+use std::marker::Unsize;
 use std::mem;
-use std::ops::{Deref, DerefMut};
+use std::ops::{CoerceUnsized, Deref, DerefMut};
+use std::raw::TraitObject;
 use std::ptr;
 
 use alloc::heap;
@@ -35,11 +49,11 @@ use alloc::heap;
 extern crate alloc;
 
 /// An item allocated by a custom allocator.
-pub struct Allocated<'a, T: 'a> {
+pub struct Allocated<'a, T: 'a + ?Sized> {
     item: &'a mut T,
 }
 
-impl<'a, T> Deref for Allocated<'a, T> {
+impl<'a, T: ?Sized> Deref for Allocated<'a, T> {
     type Target = T;
 
     fn deref<'b>(&'b self) -> &'b T {
@@ -47,17 +61,40 @@ impl<'a, T> Deref for Allocated<'a, T> {
     }
 }
 
-impl<'a, T> DerefMut for Allocated<'a, T> {
+impl<'a, T: ?Sized> DerefMut for Allocated<'a, T> {
     fn deref_mut<'b>(&'b mut self) -> &'b mut T {
         self.item
     }
 }
 
-impl<'a, T> Drop for Allocated<'a, T> {
+// Allocated can store trait objects!
+impl<'a, T: ?Sized + Unsize<U>, U: ?Sized> CoerceUnsized<Allocated<'a, U>> for Allocated<'a, T> {}
+
+impl<'a> Allocated<'a, Any> {
+    /// Attempts to downcast this `Allocated` to a concrete type.
+    pub fn downcast<T: Any>(self) -> Result<Allocated<'a, T>, Allocated<'a, Any>> {
+        if self.item.is::<T>() {
+            let obj: TraitObject = unsafe { mem::transmute(self.item as *mut Any) };
+            mem::forget(self);
+            Ok(Allocated { item: unsafe { mem::transmute(obj.data) } })
+        } else {
+            Err(self)
+        }
+    }
+}
+
+impl<'a, T: ?Sized> Borrow<T> for Allocated<'a, T> {
+    fn borrow(&self) -> &T { &**self }
+}
+
+impl<'a, T: ?Sized> BorrowMut<T> for Allocated<'a, T> {
+    fn borrow_mut(&mut self) -> &mut T { &mut **self }
+}
+
+impl<'a, T: ?Sized> Drop for Allocated<'a, T> {
     #[inline]
     fn drop(&mut self) {
-        // could also use ptr::read_and_drop
-        unsafe { let _ = ptr::read(self.item as *mut T); }
+        unsafe { let _ = drop_in_place(self.item as *mut T); }
     }
 }
 
@@ -177,12 +214,27 @@ impl Drop for ScopedAllocator {
     }
 }
 
-#[test]
-#[should_panic]
-fn use_outer() {
-    let alloc = ScopedAllocator::new(4);
-    alloc.scope(|_inner| {
-        // using outer allocator is dangerous and should fail.
-        let _val = alloc.allocate(1i32).ok().unwrap();
-    })
+#[cfg(test)]
+mod tests {
+    #[test]
+    #[should_panic]
+    fn use_outer() {
+        let alloc = ScopedAllocator::new(4);
+        alloc.scope(|_inner| {
+            // using outer allocator is dangerous and should fail.
+            let _val = alloc.allocate(1i32).ok().unwrap();
+        })
+    }
+
+    #[test]
+    fn test_unsizing() {
+        struct Bomb;
+        impl Drop for Bomb {
+            fn drop(&mut self) { println!("Boom") }
+        }
+
+        let alloc = ScopedAllocator::new(4);
+        let my_foo: Allocated<Any> = alloc.allocate(Bomb).ok().unwrap();
+        let _: Allocated<Bomb> = my_foo.downcast().ok().unwrap();
+    }
 }
