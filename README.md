@@ -13,14 +13,14 @@ impl Drop for Bomb {
 // new allocator with a kilobyte of memory.
 let alloc = ScopedAllocator::new(1024);
 
-alloc.scope(|| {
+alloc.scope(|inner| {
     let mut bombs = Vec::new();
-    for i in 0..100 { bombs.push(alloc.allocate(Bomb(i)).ok().unwrap())}
+    for i in 0..100 { bombs.push(inner.allocate(Bomb(i)).ok().unwrap())}
 
     // watch the bombs go off!
 });
 
-let my_int = alloc.allocate(23);
+let my_int = alloc.allocate(23).ok().unwrap();
 println!("My int: {}", *my_int);
 ```
 
