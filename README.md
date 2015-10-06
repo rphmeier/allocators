@@ -1,5 +1,5 @@
-# Scoped Allocator
-=====
+# Scoped Allocator 
+[![Build Status](https://travis-ci.org/rphmeier/scoped_allocator.svg)](https://travis-ci.org/rphmeier/scoped_allocator)
 
 This crate provides a scoped linear allocator. This is useful for reusing a block of memory for temporary allocations in a tight loop. Scopes can be nested and values allocated in a scope cannot be moved outside it.
 
