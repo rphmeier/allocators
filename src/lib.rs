@@ -216,6 +216,10 @@ impl Drop for ScopedAllocator {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+    
+    use super::*;
+
     #[test]
     #[should_panic]
     fn use_outer() {
