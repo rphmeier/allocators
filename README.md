@@ -11,7 +11,7 @@ impl Drop for Bomb {
     } 
 }
 // new allocator with a kilobyte of memory.
-let alloc = ScopedAllocator::new(1024);
+let alloc = ScopedAllocator::new(1024).unwrap();
 
 alloc.scope(|inner| {
     let mut bombs = Vec::new();

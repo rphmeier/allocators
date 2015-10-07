@@ -12,7 +12,7 @@
 //!     } 
 //! }
 //! // new allocator with a kilobyte of memory.
-//! let alloc = ScopedAllocator::new(1024);
+//! let alloc = ScopedAllocator::new(1024).unwrap();
 //!
 //! alloc.scope(|inner| {
 //!     let mut bombs = Vec::new();
@@ -36,6 +36,8 @@
 use std::any::Any;
 use std::borrow::{Borrow, BorrowMut};
 use std::cell::Cell;
+use std::error::Error;
+use std::fmt;
 use std::intrinsics::drop_in_place;
 use std::marker::Unsize;
 use std::mem;
@@ -48,9 +50,11 @@ use alloc::heap;
 extern crate alloc;
 
 /// A custom memory allocator.
-pub trait Allocator {
-    /// Attempts to allocate space for the T supplied to it.
-    fn allocate<'a, T>(&'a self, val: T) -> Result<Allocated<'a, T, Self>, T> where Self: Sized {
+pub unsafe trait Allocator {
+    /// Attempts to allocate space for the value supplied to it.
+    /// At the moment, this incurs an expensive memcpy when copying `val`
+    /// to the allocated space.
+    fn allocate<'a, T>(&'a self, val: T) -> Result<Allocated<'a, T, Self>, (AllocatorError, T)> where Self: Sized {
         let (size, align) = (mem::size_of::<T>(), mem::align_of::<T>());
         match unsafe { self.allocate_raw(size, align) } {
             Ok(ptr) => {
@@ -63,17 +67,21 @@ pub trait Allocator {
                     align: align
                 })
             }
-            Err(_) => Err(val)
+            Err(e) => Err((e, val))
         }
     }
 
     /// Attempt to allocate a block of memory.
     ///
+    /// Returns either a pointer to the block of memory allocated
+    /// or an Error. If `size` is equal to 0, the pointer returned must
+    /// be equal to `heap::EMPTY`
+    ///
     /// # Safety
     /// Never use the pointer outside of the lifetime of the allocator.
     /// It must be deallocated with the same allocator as it was allocated with.
     /// It is undefined behavior to provide a non power-of-two align.
-    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<*mut u8, ()>;
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<*mut u8, AllocatorError>;
 
     /// Deallocate the memory referred to by this pointer.
     ///
@@ -85,14 +93,46 @@ pub trait Allocator {
     unsafe fn deallocate_raw(&self, ptr: *mut u8, size: usize, align: usize);
 }
 
+/// Errors that can occur while creating an allocator
+/// or allocating from it.
+#[derive(Debug, Eq, PartialEq)]
+pub enum AllocatorError {
+    /// The allocator failed to allocate the amount of memory requested of it.
+    OutOfMemory,
+    /// An allocator-specific error message.
+    AllocatorSpecific(String),
+}
+
+impl fmt::Display for AllocatorError {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str(self.description())
+    }
+}
+
+impl Error for AllocatorError {
+    fn description(&self) -> &str {
+        use AllocatorError::*;
+
+        match *self {
+            OutOfMemory => {
+                "Allocator out of memory."
+            }
+            AllocatorSpecific(ref reason) => {
+                reason
+            }
+        }
+    }
+}
+
 /// Allocator stub that just forwards to heap allocation.
+#[derive(Debug)]
 pub struct HeapAllocator;
 
 // A constant so allocators can use the heap as a root.
 const HEAP: &'static HeapAllocator = &HeapAllocator;
 
-impl Allocator for HeapAllocator {
-    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<*mut u8, ()> {
+unsafe impl Allocator for HeapAllocator {
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<*mut u8, AllocatorError> {
         let ptr = if size != 0 {
             heap::allocate(size, align)
         } else {
@@ -100,7 +140,7 @@ impl Allocator for HeapAllocator {
         };
 
         if ptr.is_null() {
-            Err(())
+            Err(AllocatorError::OutOfMemory)
         } else {
             Ok(ptr)
         }
@@ -173,7 +213,6 @@ impl<'a, T: ?Sized, A: Allocator> Drop for Allocated<'a, T, A> {
 
     }
 }
-
 /// A scoped linear allocator
 pub struct ScopedAllocator<'parent, A: 'parent + Allocator> {
     allocator: &'parent A,
@@ -185,45 +224,38 @@ pub struct ScopedAllocator<'parent, A: 'parent + Allocator> {
 
 impl ScopedAllocator<'static, HeapAllocator> {
     /// Creates a new `ScopedAllocator` backed by `size` bytes from the heap.
-    pub fn new(size: usize) -> Self {
+    pub fn new(size: usize) -> Result<Self, AllocatorError> {
         ScopedAllocator::new_from(HEAP, size)
     }
 }
+
 impl<'parent, A: Allocator> ScopedAllocator<'parent, A> {
     /// Creates a new `ScopedAllocator` backed by `size` bytes from the allocator supplied.
-    pub fn new_from(alloc: &'parent A, size: usize) -> Self {
+    pub fn new_from(alloc: &'parent A, size: usize) -> Result<Self, AllocatorError> {
         // Create a memory buffer with the desired size and maximal align from the parent.
-        let start = if size != 0 {
-            unsafe { 
-                alloc.allocate_raw(size, mem::align_of::<usize>())
-                .unwrap_or(ptr::null_mut())
-            }
-        } else {
-            heap::EMPTY as *mut u8
-        };
-
-        if start.is_null() {
-            // do result-based error management instead?
-            panic!("Out of memory!");
-        }
-
-        ScopedAllocator {
-            allocator: alloc,
-            current: Cell::new(start),
-            end: unsafe { start.offset(size as isize) },
-            root: true,
-            start: start,
+        match unsafe { alloc.allocate_raw(size, mem::align_of::<usize>()) } {
+            Ok(start) => 
+                Ok(ScopedAllocator {
+                    allocator: alloc,
+                    current: Cell::new(start),
+                    end: unsafe { start.offset(size as isize) },
+                    root: true,
+                    start: start,
+                }),
+            Err(err) => Err(err)
         }
     }
 
     /// Calls the supplied function with a new scope of the allocator.
     ///
-    /// # Safety
-    ///
-    /// Any of the member functions of ScopedAllocator will panic if called
-    /// on the outer allocator inside the scope.
-    pub fn scope<F, U>(&self, f: F) -> U where F: FnMut(&Self) -> U {
-        self.ensure_not_scoped();
+    /// Returns the result of the closure or an error if this allocator
+    /// has already been scoped.
+    pub fn scope<F, U>(&self, f: F) -> Result<U, ()> 
+    where F: FnMut(&Self) -> U {
+        if self.is_scoped() {
+            return Err(())
+        }
+
         let mut f = f;
         let old = self.current.get();
         let alloc = ScopedAllocator {
@@ -241,41 +273,31 @@ impl<'parent, A: Allocator> ScopedAllocator<'parent, A> {
         self.current.set(old);
         
         mem::forget(alloc);
-        u
+        Ok(u)
     }
 
     // Whether this allocator is currently scoped.
     pub fn is_scoped(&self) -> bool {
         self.current.get().is_null()
     }
-
-    fn ensure_not_scoped(&self) {
-        debug_assert!(
-            !self.is_scoped(), 
-            "Called method on currently scoped allocator"
-        );
-    }
 }
 
-impl<'a, A: Allocator> Allocator for ScopedAllocator<'a, A> {
+unsafe impl<'a, A: Allocator> Allocator for ScopedAllocator<'a, A> {
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<*mut u8, AllocatorError> {
+        if self.is_scoped() { 
+            return Err(
+                AllocatorError::AllocatorSpecific(
+                    "Called allocate on already scoped allocator.".into()
+                )
+            )
+        }
 
-    /// Attempts to allocate some bytes directly.
-    /// Returns either a pointer to the start of the allocated block or nothing.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this is called on a currently scoped allocator.
-    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<*mut u8, ()> {
-        debug_assert!(
-            !self.is_scoped(), 
-            "Called method on currently scoped allocator"
-        );
         let current_ptr = self.current.get();
         let aligned_ptr = ((current_ptr as usize + align - 1) & !(align - 1)) as *mut u8;
         let end_ptr = aligned_ptr.offset(size as isize);
 
         if end_ptr > self.end {
-            Err(())
+            Err(AllocatorError::OutOfMemory)
         } else {
             self.current.set(end_ptr);
             Ok(aligned_ptr)
@@ -310,12 +332,12 @@ mod tests {
     #[test]
     #[should_panic]
     fn use_outer() {
-        let alloc = ScopedAllocator::new(4);
+        let alloc = ScopedAllocator::new(4).unwrap();
         let mut outer_val = alloc.allocate(0i32).ok().unwrap();
         alloc.scope(|_inner| {
             // using outer allocator is dangerous and should fail.
             outer_val = alloc.allocate(1i32).ok().unwrap();
-        })
+        }).unwrap();
     }
 
     #[test]
@@ -325,20 +347,28 @@ mod tests {
             fn drop(&mut self) { println!("Boom") }
         }
 
-        let alloc = ScopedAllocator::new(4);
+        let alloc = ScopedAllocator::new(4).unwrap();
         let my_foo: Allocated<Any, _> = alloc.allocate(Bomb).ok().unwrap();
         let _: Allocated<Bomb, _> = my_foo.downcast().ok().unwrap();
     }
 
     #[test]
     fn scope_scope() {
-        let alloc = ScopedAllocator::new(64);
+        let alloc = ScopedAllocator::new(64).unwrap();
         let _ = alloc.allocate(0).ok().unwrap();
         alloc.scope(|inner| {
             let _ = inner.allocate(32);
             inner.scope(|bottom| {
                 let _ = bottom.allocate(23);
-            })
-        });
+            }).unwrap();
+        }).unwrap();
+    }
+
+    #[test]
+    fn out_of_memory() {
+        // allocate more memory than the allocator has.
+        let alloc = ScopedAllocator::new(0).unwrap();
+        let (err, _) = alloc.allocate(1i32).err().unwrap();
+        assert_eq!(err, AllocatorError::OutOfMemory);
     }
 }
