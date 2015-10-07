@@ -29,7 +29,6 @@
     coerce_unsized,
     core_intrinsics,
     heap_api,
-    ptr_as_ref,
     raw,
     unsize
 )]
@@ -57,9 +56,8 @@ pub trait Allocator {
             Ok(ptr) => {
                 let item = ptr as *mut T;
                 unsafe { ptr::write(item, val) };
-
                 Ok(Allocated {
-                    item: unsafe { item.as_mut().expect("allocate returned null ptr") },
+                    item: item,
                     allocator: self,
                     size: size,
                     align: align
@@ -83,10 +81,35 @@ pub trait Allocator {
     /// This pointer must have been allocated by this allocator.
     /// The size and align must be the same as when they were allocated.
     /// Do not deallocate the same pointer twice. Behavior is implementation-defined,
-    /// but usually not expected.
+    /// but usually it will not behave as expected.
     unsafe fn deallocate_raw(&self, ptr: *mut u8, size: usize, align: usize);
 }
 
+/// Allocator stub that just forwards to heap allocation.
+pub struct HeapAllocator;
+
+// A constant so allocators can use the heap as a root.
+const HEAP: &'static HeapAllocator = &HeapAllocator;
+
+impl Allocator for HeapAllocator {
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<*mut u8, ()> {
+        let ptr = if size != 0 {
+            heap::allocate(size, align)
+        } else {
+            heap::EMPTY as *mut u8
+        };
+
+        if ptr.is_null() {
+            Err(())
+        } else {
+            Ok(ptr)
+        }
+    }
+
+    unsafe fn deallocate_raw(&self, ptr: *mut u8, size: usize, align: usize) {
+        heap::deallocate(ptr, size, align)
+    }
+}
 
 /// An item allocated by a custom allocator.
 pub struct Allocated<'a, T: 'a + ?Sized, A: 'a + Allocator> {
@@ -152,18 +175,29 @@ impl<'a, T: ?Sized, A: Allocator> Drop for Allocated<'a, T, A> {
 }
 
 /// A scoped linear allocator
-pub struct ScopedAllocator {
+pub struct ScopedAllocator<'parent, A: 'parent + Allocator> {
+    allocator: &'parent A,
     current: Cell<*mut u8>,
     end: *mut u8,
+    root: bool,
     start: *mut u8,
 }
 
-impl ScopedAllocator {
-    /// Creates a new `ScopedAllocator` backed by `size` bytes.
+impl ScopedAllocator<'static, HeapAllocator> {
+    /// Creates a new `ScopedAllocator` backed by `size` bytes from the heap.
     pub fn new(size: usize) -> Self {
-        // Create a memory buffer with the desired size and maximal align.
+        ScopedAllocator::new_from(HEAP, size)
+    }
+}
+impl<'parent, A: Allocator> ScopedAllocator<'parent, A> {
+    /// Creates a new `ScopedAllocator` backed by `size` bytes from the allocator supplied.
+    pub fn new_from(alloc: &'parent A, size: usize) -> Self {
+        // Create a memory buffer with the desired size and maximal align from the parent.
         let start = if size != 0 {
-            unsafe { heap::allocate(size, mem::align_of::<usize>()) }
+            unsafe { 
+                alloc.allocate_raw(size, mem::align_of::<usize>())
+                .unwrap_or(ptr::null_mut())
+            }
         } else {
             heap::EMPTY as *mut u8
         };
@@ -174,8 +208,10 @@ impl ScopedAllocator {
         }
 
         ScopedAllocator {
+            allocator: alloc,
             current: Cell::new(start),
             end: unsafe { start.offset(size as isize) },
+            root: true,
             start: start,
         }
     }
@@ -186,13 +222,15 @@ impl ScopedAllocator {
     ///
     /// Any of the member functions of ScopedAllocator will panic if called
     /// on the outer allocator inside the scope.
-    pub fn scope<F, U>(&self, f: F) -> U where F: FnMut(&ScopedAllocator) -> U {
+    pub fn scope<F, U>(&self, f: F) -> U where F: FnMut(&Self) -> U {
         self.ensure_not_scoped();
         let mut f = f;
         let old = self.current.get();
         let alloc = ScopedAllocator {
+            allocator: self.allocator,
             current: self.current.clone(),
             end: self.end,
+            root: false,
             start: self.start,
         };
         
@@ -206,15 +244,20 @@ impl ScopedAllocator {
         u
     }
 
+    // Whether this allocator is currently scoped.
+    pub fn is_scoped(&self) -> bool {
+        self.current.get().is_null()
+    }
+
     fn ensure_not_scoped(&self) {
         debug_assert!(
-            !self.current.get().is_null(), 
+            !self.is_scoped(), 
             "Called method on currently scoped allocator"
         );
     }
 }
 
-impl Allocator for ScopedAllocator {
+impl<'a, A: Allocator> Allocator for ScopedAllocator<'a, A> {
 
     /// Attempts to allocate some bytes directly.
     /// Returns either a pointer to the start of the allocated block or nothing.
@@ -223,7 +266,10 @@ impl Allocator for ScopedAllocator {
     ///
     /// Panics if this is called on a currently scoped allocator.
     unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<*mut u8, ()> {
-        self.ensure_not_scoped();
+        debug_assert!(
+            !self.is_scoped(), 
+            "Called method on currently scoped allocator"
+        );
         let current_ptr = self.current.get();
         let aligned_ptr = ((current_ptr as usize + align - 1) & !(align - 1)) as *mut u8;
         let end_ptr = aligned_ptr.offset(size as isize);
@@ -238,18 +284,19 @@ impl Allocator for ScopedAllocator {
 
     #[allow(unused_variables)]
     unsafe fn deallocate_raw(&self, ptr: *mut u8, size: usize, align: usize) {
-        self.ensure_not_scoped();
         // no op for this. The memory gets reused when the scope is cleared.
     }
 }
 
-impl Drop for ScopedAllocator {
+impl<'a, A: Allocator> Drop for ScopedAllocator<'a, A> {
     /// Drops the `ScopedAllocator`
     fn drop(&mut self) {
         let size = self.end as usize - self.start as usize;
-        // if the allocator is scoped, the memory will be freed by the child.
-        if !self.current.get().is_null() && size > 0 { 
-            unsafe { heap::deallocate(self.start, size, mem::align_of::<usize>()) }
+        // only free if this allocator is the root to make sure
+        // that memory is freed after destructors for allocated objects
+        // are called in case of unwind
+        if self.root && size > 0 { 
+            unsafe { self.allocator.deallocate_raw(self.start, size, mem::align_of::<usize>()) }
         }
     }
 }
@@ -264,14 +311,15 @@ mod tests {
     #[should_panic]
     fn use_outer() {
         let alloc = ScopedAllocator::new(4);
+        let mut outer_val = alloc.allocate(0i32).ok().unwrap();
         alloc.scope(|_inner| {
             // using outer allocator is dangerous and should fail.
-            let _val = alloc.allocate(1i32).ok().unwrap();
+            outer_val = alloc.allocate(1i32).ok().unwrap();
         })
     }
 
     #[test]
-    fn test_unsizing() {
+    fn unsizing() {
         struct Bomb;
         impl Drop for Bomb {
             fn drop(&mut self) { println!("Boom") }
@@ -280,5 +328,17 @@ mod tests {
         let alloc = ScopedAllocator::new(4);
         let my_foo: Allocated<Any, _> = alloc.allocate(Bomb).ok().unwrap();
         let _: Allocated<Bomb, _> = my_foo.downcast().ok().unwrap();
+    }
+
+    #[test]
+    fn scope_scope() {
+        let alloc = ScopedAllocator::new(64);
+        let _ = alloc.allocate(0).ok().unwrap();
+        alloc.scope(|inner| {
+            let _ = inner.allocate(32);
+            inner.scope(|bottom| {
+                let _ = bottom.allocate(23);
+            })
+        });
     }
 }
