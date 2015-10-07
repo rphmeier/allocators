@@ -9,7 +9,7 @@
 //! impl Drop for Bomb {
 //!     fn drop(&mut self) {
 //!         println!("Boom! {}", self.0);
-//!     } 
+//!     }
 //! }
 //! // new allocator with a kilobyte of memory.
 //! let alloc = ScopedAllocator::new(1024).unwrap();
@@ -19,13 +19,13 @@
 //!     for i in 0..100 { bombs.push(inner.allocate(Bomb(i)).ok().unwrap())}
 //!     // watch the bombs go off!
 //! });
-//! 
+//!
 //! let my_int = alloc.allocate(23).ok().unwrap();
 //! println!("My int: {}", *my_int);
 //! ```
 
 #![feature(
-    alloc, 
+    alloc,
     coerce_unsized,
     core_intrinsics,
     heap_api,
@@ -53,7 +53,9 @@ pub unsafe trait Allocator {
     /// Attempts to allocate space for the value supplied to it.
     /// At the moment, this incurs an expensive memcpy when copying `val`
     /// to the allocated space.
-    fn allocate<'a, T>(&'a self, val: T) -> Result<Allocated<'a, T, Self>, (AllocatorError, T)> where Self: Sized {
+    fn allocate<'a, T>(&'a self, val: T) -> Result<Allocated<'a, T, Self>, (AllocatorError, T)>
+        where Self: Sized
+    {
         use std::ptr;
 
         let (size, align) = (mem::size_of::<T>(), mem::align_of::<T>());
@@ -65,10 +67,10 @@ pub unsafe trait Allocator {
                     item: item,
                     allocator: self,
                     size: size,
-                    align: align
+                    align: align,
                 })
             }
-            Err(e) => Err((e, val))
+            Err(e) => Err((e, val)),
         }
     }
 
@@ -183,11 +185,11 @@ impl<'a, A: Allocator> Allocated<'a, Any, A> {
         use std::raw::TraitObject;
         if self.is::<T>() {
             let obj: TraitObject = unsafe { mem::transmute(self.item as *mut Any) };
-            let new_allocated = Allocated { 
+            let new_allocated = Allocated {
                 item: unsafe { mem::transmute(obj.data) },
                 allocator: self.allocator,
                 size: self.size,
-                align: self.align
+                align: self.align,
             };
             mem::forget(self);
             Ok(new_allocated)
@@ -198,18 +200,22 @@ impl<'a, A: Allocator> Allocated<'a, Any, A> {
 }
 
 impl<'a, T: ?Sized, A: Allocator> Borrow<T> for Allocated<'a, T, A> {
-    fn borrow(&self) -> &T { &**self }
+    fn borrow(&self) -> &T {
+        &**self
+    }
 }
 
 impl<'a, T: ?Sized, A: Allocator> BorrowMut<T> for Allocated<'a, T, A> {
-    fn borrow_mut(&mut self) -> &mut T { &mut **self }
+    fn borrow_mut(&mut self) -> &mut T {
+        &mut **self
+    }
 }
 
 impl<'a, T: ?Sized, A: Allocator> Drop for Allocated<'a, T, A> {
     #[inline]
     fn drop(&mut self) {
         use std::intrinsics::drop_in_place;
-        unsafe { 
+        unsafe {
             drop_in_place(self.item);
             self.allocator.deallocate_raw(self.item as *mut u8, self.size, self.align);
         }

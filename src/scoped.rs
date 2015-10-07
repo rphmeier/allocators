@@ -2,12 +2,7 @@ use std::cell::Cell;
 use std::mem;
 use std::ptr;
 
-use super::{
-    Allocator,
-    AllocatorError,
-    HeapAllocator,
-    HEAP,
-};
+use super::{Allocator, AllocatorError, HeapAllocator, HEAP};
 
 /// A scoped linear allocator
 pub struct ScopedAllocator<'parent, A: 'parent + Allocator> {
@@ -30,15 +25,14 @@ impl<'parent, A: Allocator> ScopedAllocator<'parent, A> {
     pub fn new_from(alloc: &'parent A, size: usize) -> Result<Self, AllocatorError> {
         // Create a memory buffer with the desired size and maximal align from the parent.
         match unsafe { alloc.allocate_raw(size, mem::align_of::<usize>()) } {
-            Ok(start) => 
-                Ok(ScopedAllocator {
-                    allocator: alloc,
-                    current: Cell::new(start),
-                    end: unsafe { start.offset(size as isize) },
-                    root: true,
-                    start: start,
-                }),
-            Err(err) => Err(err)
+            Ok(start) => Ok(ScopedAllocator {
+                allocator: alloc,
+                current: Cell::new(start),
+                end: unsafe { start.offset(size as isize) },
+                root: true,
+                start: start,
+            }),
+            Err(err) => Err(err),
         }
     }
 
@@ -46,8 +40,9 @@ impl<'parent, A: Allocator> ScopedAllocator<'parent, A> {
     ///
     /// Returns the result of the closure or an error if this allocator
     /// has already been scoped.
-    pub fn scope<F, U>(&self, f: F) -> Result<U, ()> 
-    where F: FnMut(&Self) -> U {
+    pub fn scope<F, U>(&self, f: F) -> Result<U, ()>
+        where F: FnMut(&Self) -> U
+    {
         if self.is_scoped() {
             return Err(())
         }
@@ -61,13 +56,13 @@ impl<'parent, A: Allocator> ScopedAllocator<'parent, A> {
             root: false,
             start: self.start,
         };
-        
+
         // set the current pointer to null as a flag to indicate
         // that this allocator is being scoped.
         self.current.set(ptr::null_mut());
         let u = f(&alloc);
         self.current.set(old);
-        
+
         mem::forget(alloc);
         Ok(u)
     }
@@ -80,12 +75,10 @@ impl<'parent, A: Allocator> ScopedAllocator<'parent, A> {
 
 unsafe impl<'a, A: Allocator> Allocator for ScopedAllocator<'a, A> {
     unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<*mut u8, AllocatorError> {
-        if self.is_scoped() { 
-            return Err(
-                AllocatorError::AllocatorSpecific(
-                    "Called allocate on already scoped allocator.".into()
-                )
-            )
+        if self.is_scoped() {
+            return Err(AllocatorError::AllocatorSpecific("Called allocate on already scoped \
+                                                          allocator."
+                                                             .into()))
         }
 
         let current_ptr = self.current.get();
@@ -113,7 +106,7 @@ impl<'a, A: Allocator> Drop for ScopedAllocator<'a, A> {
         // only free if this allocator is the root to make sure
         // that memory is freed after destructors for allocated objects
         // are called in case of unwind
-        if self.root && size > 0 { 
+        if self.root && size > 0 {
             unsafe { self.allocator.deallocate_raw(self.start, size, mem::align_of::<usize>()) }
         }
     }
@@ -122,7 +115,7 @@ impl<'a, A: Allocator> Drop for ScopedAllocator<'a, A> {
 #[cfg(test)]
 mod tests {
     use std::any::Any;
-    
+
     use super::super::*;
 
     #[test]
@@ -132,15 +125,18 @@ mod tests {
         let mut outer_val = alloc.allocate(0i32).ok().unwrap();
         alloc.scope(|_inner| {
             // using outer allocator is dangerous and should fail.
-            outer_val = alloc.allocate(1i32).ok().unwrap();
-        }).unwrap();
+                 outer_val = alloc.allocate(1i32).ok().unwrap();
+             })
+             .unwrap();
     }
 
     #[test]
     fn unsizing() {
         struct Bomb;
         impl Drop for Bomb {
-            fn drop(&mut self) { println!("Boom") }
+            fn drop(&mut self) {
+                println!("Boom")
+            }
         }
 
         let alloc = ScopedAllocator::new(4).unwrap();
@@ -153,11 +149,13 @@ mod tests {
         let alloc = ScopedAllocator::new(64).unwrap();
         let _ = alloc.allocate(0).ok().unwrap();
         alloc.scope(|inner| {
-            let _ = inner.allocate(32);
-            inner.scope(|bottom| {
-                let _ = bottom.allocate(23);
-            }).unwrap();
-        }).unwrap();
+                 let _ = inner.allocate(32);
+                 inner.scope(|bottom| {
+                          let _ = bottom.allocate(23);
+                      })
+                      .unwrap();
+             })
+             .unwrap();
     }
 
     #[test]
