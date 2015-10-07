@@ -4,7 +4,7 @@
 //!
 //! # Examples
 //! ```rust
-//! use scoped_allocator::ScopedAllocator;
+//! use scoped_allocator::{Allocator, ScopedAllocator};
 //! struct Bomb(u8);
 //! impl Drop for Bomb {
 //!     fn drop(&mut self) {
@@ -48,53 +48,106 @@ use alloc::heap;
 
 extern crate alloc;
 
-/// An item allocated by a custom allocator.
-pub struct Allocated<'a, T: 'a + ?Sized> {
-    item: &'a mut T,
+/// A custom memory allocator.
+pub trait Allocator {
+    /// Attempts to allocate space for the T supplied to it.
+    fn allocate<'a, T>(&'a self, val: T) -> Result<Allocated<'a, T, Self>, T> where Self: Sized {
+        let (size, align) = (mem::size_of::<T>(), mem::align_of::<T>());
+        match unsafe { self.allocate_raw(size, align) } {
+            Ok(ptr) => {
+                let item = ptr as *mut T;
+                unsafe { ptr::write(item, val) };
+
+                Ok(Allocated {
+                    item: unsafe { item.as_mut().expect("allocate returned null ptr") },
+                    allocator: self,
+                    size: size,
+                    align: align
+                })
+            }
+            Err(_) => Err(val)
+        }
+    }
+
+    /// Attempt to allocate a block of memory.
+    ///
+    /// # Safety
+    /// Never use the pointer outside of the lifetime of the allocator.
+    /// It must be deallocated with the same allocator as it was allocated with.
+    /// It is undefined behavior to provide a non power-of-two align.
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<*mut u8, ()>;
+
+    /// Deallocate the memory referred to by this pointer.
+    ///
+    /// # Safety
+    /// This pointer must have been allocated by this allocator.
+    /// The size and align must be the same as when they were allocated.
+    /// Do not deallocate the same pointer twice. Behavior is implementation-defined,
+    /// but usually not expected.
+    unsafe fn deallocate_raw(&self, ptr: *mut u8, size: usize, align: usize);
 }
 
-impl<'a, T: ?Sized> Deref for Allocated<'a, T> {
+
+/// An item allocated by a custom allocator.
+pub struct Allocated<'a, T: 'a + ?Sized, A: 'a + Allocator> {
+    item: *mut T,
+    allocator: &'a A,
+    size: usize,
+    align: usize,
+}
+
+impl<'a, T: ?Sized, A: Allocator> Deref for Allocated<'a, T, A> {
     type Target = T;
 
     fn deref<'b>(&'b self) -> &'b T {
-        &*self.item
+        unsafe { mem::transmute(self.item) }
     }
 }
 
-impl<'a, T: ?Sized> DerefMut for Allocated<'a, T> {
+impl<'a, T: ?Sized, A: Allocator> DerefMut for Allocated<'a, T, A> {
     fn deref_mut<'b>(&'b mut self) -> &'b mut T {
-        self.item
+        unsafe { mem::transmute(self.item) }
     }
 }
 
 // Allocated can store trait objects!
-impl<'a, T: ?Sized + Unsize<U>, U: ?Sized> CoerceUnsized<Allocated<'a, U>> for Allocated<'a, T> {}
+impl<'a, T: ?Sized + Unsize<U>, U: ?Sized, A: Allocator> CoerceUnsized<Allocated<'a, U, A>> for Allocated<'a, T, A> {}
 
-impl<'a> Allocated<'a, Any> {
+impl<'a, A: Allocator> Allocated<'a, Any, A> {
     /// Attempts to downcast this `Allocated` to a concrete type.
-    pub fn downcast<T: Any>(self) -> Result<Allocated<'a, T>, Allocated<'a, Any>> {
-        if self.item.is::<T>() {
+    pub fn downcast<T: Any>(self) -> Result<Allocated<'a, T, A>, Allocated<'a, Any, A>> {
+        if self.is::<T>() {
             let obj: TraitObject = unsafe { mem::transmute(self.item as *mut Any) };
+            let new_allocated = Allocated { 
+                item: unsafe { mem::transmute(obj.data) },
+                allocator: self.allocator,
+                size: self.size,
+                align: self.align
+            };
             mem::forget(self);
-            Ok(Allocated { item: unsafe { mem::transmute(obj.data) } })
+            Ok(new_allocated)
         } else {
             Err(self)
         }
     }
 }
 
-impl<'a, T: ?Sized> Borrow<T> for Allocated<'a, T> {
+impl<'a, T: ?Sized, A: Allocator> Borrow<T> for Allocated<'a, T, A> {
     fn borrow(&self) -> &T { &**self }
 }
 
-impl<'a, T: ?Sized> BorrowMut<T> for Allocated<'a, T> {
+impl<'a, T: ?Sized, A: Allocator> BorrowMut<T> for Allocated<'a, T, A> {
     fn borrow_mut(&mut self) -> &mut T { &mut **self }
 }
 
-impl<'a, T: ?Sized> Drop for Allocated<'a, T> {
+impl<'a, T: ?Sized, A: Allocator> Drop for Allocated<'a, T, A> {
     #[inline]
     fn drop(&mut self) {
-        unsafe { let _ = drop_in_place(self.item as *mut T); }
+        unsafe { 
+            drop_in_place(self.item);
+            self.allocator.deallocate_raw(self.item as *mut u8, self.size, self.align);
+        }
+
     }
 }
 
@@ -125,56 +178,14 @@ impl ScopedAllocator {
             end: unsafe { start.offset(size as isize) },
             start: start,
         }
-
-    }
-
-    /// Attempts to allocate space for the T supplied to it.
-    ///
-    /// This function is most definitely not thread-safe.
-    /// Returns either the allocated object or `val` back on failure.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this is called on a currently scoped allocator.
-    pub fn allocate<'a, T>(&'a self, val: T) -> Result<Allocated<'a, T>, T> {
-        match unsafe { self.allocate_raw(mem::size_of::<T>(), mem::align_of::<T>()) } {
-            Ok(ptr) => {
-                let item = ptr as *mut T;
-                unsafe { ptr::write(item, val) };
-
-                Ok(Allocated {
-                    item: unsafe { item.as_mut().expect("allocate returned null ptr") },
-                })
-            }
-            Err(_) => Err(val)
-        }
-    }
-
-    /// Attempts to allocate some bytes directly.
-    /// Returns either a pointer to the start of the allocated block or nothing.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this is called on a currently scoped allocator.
-    pub unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<*mut u8, ()> {
-        self.ensure_not_scoped();
-        let current_ptr = self.current.get();
-        let aligned_ptr = ((current_ptr as usize + align - 1) & !(align - 1)) as *mut u8;
-        let end_ptr = aligned_ptr.offset(size as isize);
-
-        if end_ptr > self.end {
-            Err(())
-        } else {
-            self.current.set(end_ptr);
-            Ok(aligned_ptr)
-        }
     }
 
     /// Calls the supplied function with a new scope of the allocator.
     ///
-    /// # Panics
+    /// # Safety
     ///
-    /// Panics if this is called on a currently scoped allocator.
+    /// Any of the member functions of ScopedAllocator will panic if called
+    /// on the outer allocator inside the scope.
     pub fn scope<F, U>(&self, f: F) -> U where F: FnMut(&ScopedAllocator) -> U {
         self.ensure_not_scoped();
         let mut f = f;
@@ -200,6 +211,35 @@ impl ScopedAllocator {
             !self.current.get().is_null(), 
             "Called method on currently scoped allocator"
         );
+    }
+}
+
+impl Allocator for ScopedAllocator {
+
+    /// Attempts to allocate some bytes directly.
+    /// Returns either a pointer to the start of the allocated block or nothing.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this is called on a currently scoped allocator.
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<*mut u8, ()> {
+        self.ensure_not_scoped();
+        let current_ptr = self.current.get();
+        let aligned_ptr = ((current_ptr as usize + align - 1) & !(align - 1)) as *mut u8;
+        let end_ptr = aligned_ptr.offset(size as isize);
+
+        if end_ptr > self.end {
+            Err(())
+        } else {
+            self.current.set(end_ptr);
+            Ok(aligned_ptr)
+        }
+    }
+
+    #[allow(unused_variables)]
+    unsafe fn deallocate_raw(&self, ptr: *mut u8, size: usize, align: usize) {
+        self.ensure_not_scoped();
+        // no op for this. The memory gets reused when the scope is cleared.
     }
 }
 
@@ -238,7 +278,7 @@ mod tests {
         }
 
         let alloc = ScopedAllocator::new(4);
-        let my_foo: Allocated<Any> = alloc.allocate(Bomb).ok().unwrap();
-        let _: Allocated<Bomb> = my_foo.downcast().ok().unwrap();
+        let my_foo: Allocated<Any, _> = alloc.allocate(Bomb).ok().unwrap();
+        let _: Allocated<Bomb, _> = my_foo.downcast().ok().unwrap();
     }
 }
