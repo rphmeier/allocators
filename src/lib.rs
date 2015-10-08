@@ -4,6 +4,7 @@
 //!
 //! # Examples
 //! ```rust
+//!
 //! use scoped_allocator::{Allocator, ScopedAllocator};
 //! struct Bomb(u8);
 //! impl Drop for Bomb {
@@ -16,12 +17,14 @@
 //!
 //! alloc.scope(|inner| {
 //!     let mut bombs = Vec::new();
-//!     for i in 0..100 { bombs.push(inner.allocate(Bomb(i)).ok().unwrap())}
+//!     // allocate_val makes the value on the stack first.
+//!     for i in 0..100 { bombs.push(inner.allocate_val(Bomb(i)).ok().unwrap())}
 //!     // watch the bombs go off!
 //! });
 //!
-//! let my_int = alloc.allocate(23).ok().unwrap();
+//! let my_int = alloc.allocate_val(23).ok().unwrap();
 //! println!("My int: {}", *my_int);
+//!
 //! ```
 
 #![feature(
@@ -29,6 +32,8 @@
     coerce_unsized,
     core_intrinsics,
     heap_api,
+    placement_new_protocol,
+    placement_in_syntax,
     raw,
     unsize
 )]
@@ -39,7 +44,8 @@ use std::error::Error;
 use std::fmt;
 use std::marker::Unsize;
 use std::mem;
-use std::ops::{CoerceUnsized, Deref, DerefMut};
+use std::ops::Place as StdPlace;
+use std::ops::{CoerceUnsized, Deref, DerefMut, InPlace, Placer};
 
 use alloc::heap;
 
@@ -51,9 +57,10 @@ pub use scoped::ScopedAllocator;
 /// A custom memory allocator.
 pub unsafe trait Allocator {
     /// Attempts to allocate space for the value supplied to it.
-    /// At the moment, this incurs an expensive memcpy when copying `val`
-    /// to the allocated space.
-    fn allocate<'a, T>(&'a self, val: T) -> Result<Allocated<'a, T, Self>, (AllocatorError, T)>
+    /// This incurs an expensive memcpy. If the performance of this allocation
+    /// is important to you, it is recommended to use the in-place syntax
+    /// with the `allocate` function.
+    fn allocate_val<'a, T>(&'a self, val: T) -> Result<Allocated<'a, T, Self>, (AllocatorError, T)>
         where Self: Sized
     {
         use std::ptr;
@@ -71,6 +78,23 @@ pub unsafe trait Allocator {
                 })
             }
             Err(e) => Err((e, val)),
+        }
+    }
+
+    /// Attempts to create a place to allocate into.
+    fn allocate<'a, T>(&'a self) -> Result<Place<'a, T, Self>, AllocatorError> 
+        where Self: Sized
+    {
+        let (size, align) = (mem::size_of::<T>(), mem::align_of::<T>());
+        match unsafe { self.allocate_raw(size, align) } {
+            Ok(ptr) => {
+                Ok(Place {
+                    ptr: ptr as *mut T,
+                    allocator: self,
+                    finalized: false,
+                })
+            }
+            Err(e) => Err(e),
         }
     }
 
@@ -219,6 +243,54 @@ impl<'a, T: ?Sized, A: Allocator> Drop for Allocated<'a, T, A> {
             drop_in_place(self.item);
             self.allocator.deallocate_raw(self.item as *mut u8, self.size, self.align);
         }
+
+    }
+}
+
+/// A place for allocating into.
+/// This is only used for in-place allocation,
+/// e.g. let val = in (alloc.allocate().unwrap())
+pub struct Place<'a, T: 'a, A: 'a + Allocator> {
+    allocator: &'a A,
+    ptr: *mut T,
+    finalized: bool
+}
+
+impl<'a, T: 'a, A: 'a + Allocator> Placer<T> for Place<'a, T, A> {
+    type Place = Self;
+    fn make_place(self) -> Self { self }
+}
+
+impl<'a, T: 'a, A: 'a + Allocator> InPlace<T> for Place<'a, T, A> {
+    type Owner = Allocated<'a, T, A>;
+    unsafe fn finalize(mut self) -> Self::Owner {
+        self.finalized = true;
+        Allocated {
+            item: self.ptr,
+            allocator: self.allocator,
+            size: mem::size_of::<T>(),
+            align: mem::align_of::<T>(),
+        }
+    }
+}
+
+impl<'a, T: 'a, A: 'a + Allocator> StdPlace<T> for Place<'a, T, A> {
+    fn pointer(&mut self) -> *mut T {
+        self.ptr
+    }
+}
+
+impl<'a, T: 'a, A: 'a + Allocator> Drop for Place<'a, T, A> {
+    #[inline]
+    fn drop(&mut self) {
+        // almost identical to Allocated::Drop, but we only drop if this
+        // was never finalized. If it was finalized, an Allocated manages this memory.
+        use std::intrinsics::drop_in_place;
+        if !self.finalized { unsafe {
+            let (size, align) = (mem::size_of::<T>(), mem::align_of::<T>());
+            drop_in_place(self.ptr);
+            self.allocator.deallocate_raw(self.ptr as *mut u8, size, align);
+        } }
 
     }
 }
