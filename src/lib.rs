@@ -4,10 +4,13 @@
 //!
 //! # Examples
 //! ```rust
-//!
 //! #![feature(placement_in_syntax)]
+//!
 //! use scoped_allocator::{Allocator, ScopedAllocator};
+//!
+//! #[derive(Debug)]
 //! struct Bomb(u8);
+//!
 //! impl Drop for Bomb {
 //!     fn drop(&mut self) {
 //!         println!("Boom! {}", self.0);
@@ -19,7 +22,7 @@
 //! alloc.scope(|inner| {
 //!     let mut bombs = Vec::new();
 //!     // allocate_val makes the value on the stack first.
-//!     for i in 0..100 { bombs.push(inner.allocate_val(Bomb(i)).ok().unwrap())}
+//!     for i in 0..100 { bombs.push(inner.allocate_val(Bomb(i)).unwrap())}
 //!     // watch the bombs go off!
 //! });
 //!
@@ -307,5 +310,25 @@ impl<'a, T: 'a, A: 'a + Allocator> Drop for Place<'a, T, A> {
             self.allocator.deallocate_raw(self.ptr as *mut u8, size, align);
         } }
 
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn heap_lifetime() {
+        let my_int;
+        {
+            my_int = HEAP.allocate_val(0i32).unwrap(); 
+        }
+
+        assert_eq!(*my_int, 0);
+    }
+    #[test]
+    fn heap_in_place() {
+        let big = in HEAP.allocate().unwrap() { [0u8; 8_000_000] };
+        assert_eq!(big.len(), 8_000_000);
     }
 }

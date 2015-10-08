@@ -127,16 +127,17 @@ mod tests {
     #[should_panic]
     fn use_outer() {
         let alloc = ScopedAllocator::new(4).unwrap();
-        let mut outer_val = alloc.allocate_val(0i32).ok().unwrap();
+        let mut outer_val = alloc.allocate_val(0i32).unwrap();
         alloc.scope(|_inner| {
             // using outer allocator is dangerous and should fail.
-                 outer_val = alloc.allocate_val(1i32).ok().unwrap();
+                 outer_val = alloc.allocate_val(1i32).unwrap();
              })
              .unwrap();
     }
 
     #[test]
     fn unsizing() {
+        #[derive(Debug)]
         struct Bomb;
         impl Drop for Bomb {
             fn drop(&mut self) {
@@ -145,14 +146,14 @@ mod tests {
         }
 
         let alloc = ScopedAllocator::new(4).unwrap();
-        let my_foo: Allocated<Any, _> = alloc.allocate_val(Bomb).ok().unwrap();
+        let my_foo: Allocated<Any, _> = alloc.allocate_val(Bomb).unwrap();
         let _: Allocated<Bomb, _> = my_foo.downcast().ok().unwrap();
     }
 
     #[test]
     fn scope_scope() {
         let alloc = ScopedAllocator::new(64).unwrap();
-        let _ = alloc.allocate_val(0).ok().unwrap();
+        let _ = alloc.allocate_val(0).unwrap();
         alloc.scope(|inner| {
                  let _ = inner.allocate_val(32);
                  inner.scope(|bottom| {
