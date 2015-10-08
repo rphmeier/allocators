@@ -53,7 +53,7 @@ use alloc::heap;
 
 extern crate alloc;
 
-mod scoped;
+pub mod scoped;
 pub use scoped::ScopedAllocator;
 
 /// A custom memory allocator.
@@ -164,11 +164,14 @@ impl Error for AllocatorError {
 }
 
 /// Allocator stub that just forwards to heap allocation.
+/// It is recommended to use the `HEAP` constant instead
+/// of creating a new instance of this, to benefit from
+/// the static lifetime that it provides.
 #[derive(Debug)]
 pub struct HeapAllocator;
 
-// A constant so allocators can use the heap as a root.
-const HEAP: &'static HeapAllocator = &HeapAllocator;
+// A constant for allocators to use the heap as a root.
+pub const HEAP: &'static HeapAllocator = &HeapAllocator;
 
 unsafe impl Allocator for HeapAllocator {
     unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<*mut u8, AllocatorError> {
