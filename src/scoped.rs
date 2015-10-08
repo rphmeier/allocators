@@ -95,7 +95,12 @@ unsafe impl<'a, A: Allocator> Allocator for ScopedAllocator<'a, A> {
 
     #[allow(unused_variables)]
     unsafe fn deallocate_raw(&self, ptr: *mut u8, size: usize, align: usize) {
-        // no op for this. The memory gets reused when the scope is cleared.
+        // no op for this unless this is the last allocation.
+        // The memory gets reused when the scope is cleared.
+        let current_ptr = self.current.get();
+        if !self.is_scoped() && ptr.offset(size as isize) == current_ptr {
+            self.current.set(ptr);
+        }
     }
 }
 
