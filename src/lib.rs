@@ -5,6 +5,7 @@
 //! # Examples
 //! ```rust
 //!
+//! #![feature(placement_in_syntax)]
 //! use scoped_allocator::{Allocator, ScopedAllocator};
 //! struct Bomb(u8);
 //! impl Drop for Bomb {
@@ -12,7 +13,7 @@
 //!         println!("Boom! {}", self.0);
 //!     }
 //! }
-//! // new allocator with a kilobyte of memory.
+//! // new scoped allocator with a kilobyte of memory.
 //! let alloc = ScopedAllocator::new(1024).unwrap();
 //!
 //! alloc.scope(|inner| {
@@ -22,7 +23,8 @@
 //!     // watch the bombs go off!
 //! });
 //!
-//! let my_int = alloc.allocate_val(23).ok().unwrap();
+//! // Allocators also have placement-in syntax.
+//! let my_int = in alloc.allocate().unwrap() { 23 };
 //! println!("My int: {}", *my_int);
 //!
 //! ```
@@ -57,10 +59,11 @@ pub use scoped::ScopedAllocator;
 /// A custom memory allocator.
 pub unsafe trait Allocator {
     /// Attempts to allocate space for the value supplied to it.
-    /// This incurs an expensive memcpy. If the performance of this allocation
+    /// This incurs an expensive memcpy which often dwarfs the
+    /// cost of the actual allocation. If the performance of this allocation
     /// is important to you, it is recommended to use the in-place syntax
     /// with the `allocate` function.
-    fn allocate_val<'a, T>(&'a self, val: T) -> Result<Allocated<'a, T, Self>, (AllocatorError, T)>
+    fn allocate_val<T>(&self, val: T) -> Result<Allocated<T, Self>, (AllocatorError, T)>
         where Self: Sized
     {
         use std::ptr;
@@ -82,7 +85,16 @@ pub unsafe trait Allocator {
     }
 
     /// Attempts to create a place to allocate into.
-    fn allocate<'a, T>(&'a self) -> Result<Place<'a, T, Self>, AllocatorError> 
+    /// 
+    /// # Examples
+    /// ```rust
+    /// #![feature(placement_in_syntax)]
+    /// use scoped_allocator::{Allocator, Allocated};
+    /// fn alloc_array<A: Allocator>(allocator: &A) -> Allocated<[u8; 1000], A> {
+    ///     in allocator.allocate().unwrap() { [0; 1000] }
+    /// }
+    /// ```
+    fn allocate<T>(&self) -> Result<Place<T, Self>, AllocatorError> 
         where Self: Sized
     {
         let (size, align) = (mem::size_of::<T>(), mem::align_of::<T>());
@@ -189,13 +201,13 @@ pub struct Allocated<'a, T: 'a + ?Sized, A: 'a + Allocator> {
 impl<'a, T: ?Sized, A: Allocator> Deref for Allocated<'a, T, A> {
     type Target = T;
 
-    fn deref<'b>(&'b self) -> &'b T {
+    fn deref(&self) -> &T {
         unsafe { mem::transmute(self.item) }
     }
 }
 
 impl<'a, T: ?Sized, A: Allocator> DerefMut for Allocated<'a, T, A> {
-    fn deref_mut<'b>(&'b mut self) -> &'b mut T {
+    fn deref_mut(&mut self) -> &mut T {
         unsafe { mem::transmute(self.item) }
     }
 }
