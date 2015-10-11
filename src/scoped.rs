@@ -82,7 +82,7 @@ unsafe impl<'a, A: Allocator> Allocator for ScopedAllocator<'a, A> {
         }
 
         let current_ptr = self.current.get();
-        let aligned_ptr = ((current_ptr as usize + align - 1) & !(align - 1)) as *mut u8;
+        let aligned_ptr = super::align_forward(current_ptr, align);
         let end_ptr = aligned_ptr.offset(size as isize);
 
         if end_ptr > self.end {

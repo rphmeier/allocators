@@ -174,6 +174,7 @@ impl Error for AllocatorError {
 pub struct HeapAllocator;
 
 // A constant for allocators to use the heap as a root.
+// Values allocated with this are effectively `Box`es.
 pub const HEAP: &'static HeapAllocator = &HeapAllocator;
 
 unsafe impl Allocator for HeapAllocator {
@@ -311,6 +312,12 @@ impl<'a, T: 'a, A: 'a + Allocator> Drop for Place<'a, T, A> {
         } }
 
     }
+}
+
+// aligns a pointer forward to the next value aligned with `align`.
+#[inline(always)]
+fn align_forward(ptr: *mut u8, align: usize) -> *mut u8 {
+    ((ptr as usize + align - 1) & !(align - 1)) as *mut u8
 }
 
 #[cfg(test)]
