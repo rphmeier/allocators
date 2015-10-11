@@ -1,5 +1,5 @@
 # Allocators 
-[![Build Status](https://travis-ci.org/rphmeier/allocator.svg)](https://travis-ci.org/rphmeier/scoped_allocator)
+[![Build Status](https://travis-ci.org/rphmeier/allocators.svg)](https://travis-ci.org/rphmeier/allocators)
 
 This crate provides a variety of different memory allocators, as well as an 
 `Allocator` trait for creating other custom allocators. Allocators can be backed by other custom allocators as well as the heap. This crate leans heavily on unsafe/unstable code at the moment, and should be considered very experimental. 
