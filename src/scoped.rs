@@ -127,10 +127,10 @@ mod tests {
     #[should_panic]
     fn use_outer() {
         let alloc = ScopedAllocator::new(4).unwrap();
-        let mut outer_val = alloc.allocate_val(0i32).unwrap();
+        let mut outer_val = alloc.allocate(0i32).unwrap();
         alloc.scope(|_inner| {
             // using outer allocator is dangerous and should fail.
-                 outer_val = alloc.allocate_val(1i32).unwrap();
+                 outer_val = alloc.allocate(1i32).unwrap();
              })
              .unwrap();
     }
@@ -146,18 +146,18 @@ mod tests {
         }
 
         let alloc = ScopedAllocator::new(4).unwrap();
-        let my_foo: Allocated<Any, _> = alloc.allocate_val(Bomb).unwrap();
+        let my_foo: Allocated<Any, _> = alloc.allocate(Bomb).unwrap();
         let _: Allocated<Bomb, _> = my_foo.downcast().ok().unwrap();
     }
 
     #[test]
     fn scope_scope() {
         let alloc = ScopedAllocator::new(64).unwrap();
-        let _ = alloc.allocate_val(0).unwrap();
+        let _ = alloc.allocate(0).unwrap();
         alloc.scope(|inner| {
-                 let _ = inner.allocate_val(32);
+                 let _ = inner.allocate(32);
                  inner.scope(|bottom| {
-                          let _ = bottom.allocate_val(23);
+                          let _ = bottom.allocate(23);
                       })
                       .unwrap();
              })
@@ -168,7 +168,7 @@ mod tests {
     fn out_of_memory() {
         // allocate more memory than the allocator has.
         let alloc = ScopedAllocator::new(0).unwrap();
-        let (err, _) = alloc.allocate_val(1i32).err().unwrap();
+        let (err, _) = alloc.allocate(1i32).err().unwrap();
         assert_eq!(err, AllocatorError::OutOfMemory);
     }
 
@@ -176,6 +176,6 @@ mod tests {
     fn placement_in() {
         let alloc = ScopedAllocator::new(8_000_000).unwrap();
         // this would smash the stack otherwise.
-        let _big = in alloc.allocate().unwrap() { [0u8; 8_000_000] };
+        let _big = in alloc.make_place().unwrap() { [0u8; 8_000_000] };
     }
 }

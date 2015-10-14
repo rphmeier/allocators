@@ -22,12 +22,12 @@
 //! alloc.scope(|inner| {
 //!     let mut bombs = Vec::new();
 //!     // allocate_val makes the value on the stack first.
-//!     for i in 0..100 { bombs.push(inner.allocate_val(Bomb(i)).unwrap())}
+//!     for i in 0..100 { bombs.push(inner.allocate(Bomb(i)).unwrap())}
 //!     // watch the bombs go off!
 //! });
 //!
 //! // Allocators also have placement-in syntax.
-//! let my_int = in alloc.allocate().unwrap() { 23 };
+//! let my_int = in alloc.make_place().unwrap() { 23 };
 //! println!("My int: {}", *my_int);
 //!
 //! ```
@@ -61,43 +61,44 @@ pub use scoped::ScopedAllocator;
 
 /// A custom memory allocator.
 pub unsafe trait Allocator {
-    /// Attempts to allocate space for the value supplied to it.
-    /// This incurs an expensive memcpy which often dwarfs the
-    /// cost of the actual allocation. If the performance of this allocation
-    /// is important to you, it is recommended to use the in-place syntax
-    /// with the `allocate` function.
-    fn allocate_val<T>(&self, val: T) -> Result<Allocated<T, Self>, (AllocatorError, T)>
+    /// Attempts to allocate the value supplied to it.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use scoped_allocator::{Allocator, Allocated};
+    /// fn alloc_array<A: Allocator>(allocator: &A) -> Allocated<[u8; 1000], A> {
+    ///     allocator.allocate([0; 1000]).ok().unwrap()
+    /// }
+    /// ```
+    #[inline(always)]
+    fn allocate<T>(&self, val: T) -> Result<Allocated<T, Self>, (AllocatorError, T)>
         where Self: Sized
     {
-        use std::ptr;
-
-        let (size, align) = (mem::size_of::<T>(), mem::align_of::<T>());
-        match unsafe { self.allocate_raw(size, align) } {
-            Ok(ptr) => {
-                let item = ptr as *mut T;
-                unsafe { ptr::write(item, val) };
-                Ok(Allocated {
-                    item: item,
-                    allocator: self,
-                    size: size,
-                    align: align,
-                })
+        match self.make_place() {
+            Ok(place) => {
+                Ok(in place { val })
             }
-            Err(e) => Err((e, val)),
+            Err(err) => {
+                Err((err, val))
+            }
         }
     }
 
     /// Attempts to create a place to allocate into.
+    /// For the general purpose, calling `allocate` on the allocator is enough.
+    /// However, when you know the value you are allocating is too large
+    /// to be constructed on the stack, you should use in-place allocation.
     /// 
     /// # Examples
     /// ```rust
     /// #![feature(placement_in_syntax)]
     /// use scoped_allocator::{Allocator, Allocated};
     /// fn alloc_array<A: Allocator>(allocator: &A) -> Allocated<[u8; 1000], A> {
-    ///     in allocator.allocate().unwrap() { [0; 1000] }
+    ///     // if 1000 bytes were enough to smash the stack, this would still work.
+    ///     in allocator.make_place().unwrap() { [0; 1000] }
     /// }
     /// ```
-    fn allocate<T>(&self) -> Result<Place<T, Self>, AllocatorError> 
+    fn make_place<T>(&self) -> Result<Place<T, Self>, AllocatorError> 
         where Self: Sized
     {
         let (size, align) = (mem::size_of::<T>(), mem::align_of::<T>());
@@ -328,14 +329,14 @@ mod tests {
     fn heap_lifetime() {
         let my_int;
         {
-            my_int = HEAP.allocate_val(0i32).unwrap(); 
+            my_int = HEAP.allocate(0i32).unwrap(); 
         }
 
         assert_eq!(*my_int, 0);
     }
     #[test]
     fn heap_in_place() {
-        let big = in HEAP.allocate().unwrap() { [0u8; 8_000_000] };
+        let big = in HEAP.make_place().unwrap() { [0u8; 8_000_000] };
         assert_eq!(big.len(), 8_000_000);
     }
 }
