@@ -56,6 +56,7 @@ use alloc::heap;
 
 extern crate alloc;
 
+pub mod composable;
 pub mod scoped;
 pub use scoped::ScopedAllocator;
 
