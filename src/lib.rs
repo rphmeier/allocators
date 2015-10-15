@@ -103,10 +103,12 @@ pub unsafe trait Allocator {
     {
         let (size, align) = (mem::size_of::<T>(), mem::align_of::<T>());
         match unsafe { self.allocate_raw(size, align) } {
-            Ok(ptr) => {
+            Ok(blk) => {
                 Ok(Place {
-                    ptr: ptr as *mut T,
                     allocator: self,
+                    ptr: blk.ptr() as *mut T,
+                    size: blk.size(),
+                    align: blk.align(),
                     finalized: false,
                 })
             }
@@ -124,16 +126,26 @@ pub unsafe trait Allocator {
     /// Never use the pointer outside of the lifetime of the allocator.
     /// It must be deallocated with the same allocator as it was allocated with.
     /// It is undefined behavior to provide a non power-of-two align.
-    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<*mut u8, AllocatorError>;
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError>;
 
     /// Deallocate the memory referred to by this pointer.
     ///
     /// # Safety
-    /// This pointer must have been allocated by this allocator.
-    /// The size and align must be the same as when they were allocated.
-    /// Do not deallocate the same pointer twice. Behavior is implementation-defined,
-    /// but usually it will not behave as expected.
-    unsafe fn deallocate_raw(&self, ptr: *mut u8, size: usize, align: usize);
+    /// This block must have been allocated by this allocator.
+    unsafe fn deallocate_raw(&self, blk: Block);
+}
+
+/// A block of memory created by an allocator.
+pub struct Block {
+    ptr: *mut u8,
+    size: usize,
+    align: usize,
+}
+
+impl Block {
+    fn ptr(&self) -> *mut u8 { self.ptr }
+    fn size(&self) -> usize { self.size }
+    fn align(&self) -> usize { self.align }
 }
 
 /// Errors that can occur while creating an allocator
@@ -179,7 +191,7 @@ pub struct HeapAllocator;
 pub const HEAP: &'static HeapAllocator = &HeapAllocator;
 
 unsafe impl Allocator for HeapAllocator {
-    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<*mut u8, AllocatorError> {
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
         let ptr = if size != 0 {
             heap::allocate(size, align)
         } else {
@@ -189,12 +201,16 @@ unsafe impl Allocator for HeapAllocator {
         if ptr.is_null() {
             Err(AllocatorError::OutOfMemory)
         } else {
-            Ok(ptr)
+            Ok(Block {
+                ptr: ptr,
+                size: size,
+                align: align,
+            })
         }
     }
 
-    unsafe fn deallocate_raw(&self, ptr: *mut u8, size: usize, align: usize) {
-        heap::deallocate(ptr, size, align)
+    unsafe fn deallocate_raw(&self, blk: Block) {
+        heap::deallocate(blk.ptr(), blk.size(), blk.align())
     }
 }
 
@@ -261,7 +277,12 @@ impl<'a, T: ?Sized, A: Allocator> Drop for Allocated<'a, T, A> {
         use std::intrinsics::drop_in_place;
         unsafe {
             drop_in_place(self.item);
-            self.allocator.deallocate_raw(self.item as *mut u8, self.size, self.align);
+
+            self.allocator.deallocate_raw(Block {
+                ptr: self.item as *mut u8, 
+                size: self.size,
+                align: self.align
+            });
         }
 
     }
@@ -273,6 +294,8 @@ impl<'a, T: ?Sized, A: Allocator> Drop for Allocated<'a, T, A> {
 pub struct Place<'a, T: 'a, A: 'a + Allocator> {
     allocator: &'a A,
     ptr: *mut T,
+    size: usize,
+    align: usize,
     finalized: bool
 }
 
@@ -288,8 +311,8 @@ impl<'a, T: 'a, A: 'a + Allocator> InPlace<T> for Place<'a, T, A> {
         Allocated {
             item: self.ptr,
             allocator: self.allocator,
-            size: mem::size_of::<T>(),
-            align: mem::align_of::<T>(),
+            size: self.size,
+            align: self.size,
         }
     }
 }
@@ -307,9 +330,13 @@ impl<'a, T: 'a, A: 'a + Allocator> Drop for Place<'a, T, A> {
         // was never finalized. If it was finalized, an Allocated manages this memory.
         use std::intrinsics::drop_in_place;
         if !self.finalized { unsafe {
-            let (size, align) = (mem::size_of::<T>(), mem::align_of::<T>());
             drop_in_place(self.ptr);
-            self.allocator.deallocate_raw(self.ptr as *mut u8, size, align);
+
+            self.allocator.deallocate_raw(Block {
+                ptr: self.ptr as *mut u8,
+                size: self.size,
+                align: self.align,
+            });
         } }
 
     }

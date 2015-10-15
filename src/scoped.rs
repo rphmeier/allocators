@@ -2,9 +2,9 @@ use std::cell::Cell;
 use std::mem;
 use std::ptr;
 
-use super::{Allocator, AllocatorError, HeapAllocator, HEAP};
+use super::{Allocator, AllocatorError, Block, HeapAllocator, HEAP};
 
-/// A scoped linear allocator
+/// A scoped linear allocator.
 pub struct ScopedAllocator<'parent, A: 'parent + Allocator> {
     allocator: &'parent A,
     current: Cell<*mut u8>,
@@ -25,12 +25,12 @@ impl<'parent, A: Allocator> ScopedAllocator<'parent, A> {
     pub fn new_from(alloc: &'parent A, size: usize) -> Result<Self, AllocatorError> {
         // Create a memory buffer with the desired size and maximal align from the parent.
         match unsafe { alloc.allocate_raw(size, mem::align_of::<usize>()) } {
-            Ok(start) => Ok(ScopedAllocator {
+            Ok(block) => Ok(ScopedAllocator {
                 allocator: alloc,
-                current: Cell::new(start),
-                end: unsafe { start.offset(size as isize) },
+                current: Cell::new(block.ptr()),
+                end: unsafe { block.ptr().offset(block.size() as isize) },
                 root: true,
-                start: start,
+                start: block.ptr(),
             }),
             Err(err) => Err(err),
         }
@@ -74,7 +74,7 @@ impl<'parent, A: Allocator> ScopedAllocator<'parent, A> {
 }
 
 unsafe impl<'a, A: Allocator> Allocator for ScopedAllocator<'a, A> {
-    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<*mut u8, AllocatorError> {
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
         if self.is_scoped() {
             return Err(AllocatorError::AllocatorSpecific("Called allocate on already scoped \
                                                           allocator."
@@ -89,17 +89,21 @@ unsafe impl<'a, A: Allocator> Allocator for ScopedAllocator<'a, A> {
             Err(AllocatorError::OutOfMemory)
         } else {
             self.current.set(end_ptr);
-            Ok(aligned_ptr)
+            Ok(Block {
+                ptr: aligned_ptr,
+                size: size,
+                align: align,
+            })
         }
     }
 
     #[allow(unused_variables)]
-    unsafe fn deallocate_raw(&self, ptr: *mut u8, size: usize, align: usize) {
+    unsafe fn deallocate_raw(&self, blk: Block) {
         // no op for this unless this is the last allocation.
         // The memory gets reused when the scope is cleared.
         let current_ptr = self.current.get();
-        if !self.is_scoped() && ptr.offset(size as isize) == current_ptr {
-            self.current.set(ptr);
+        if !self.is_scoped() && blk.ptr().offset(blk.size() as isize) == current_ptr {
+            self.current.set(blk.ptr());
         }
     }
 }
@@ -112,7 +116,13 @@ impl<'a, A: Allocator> Drop for ScopedAllocator<'a, A> {
         // that memory is freed after destructors for allocated objects
         // are called in case of unwind
         if self.root && size > 0 {
-            unsafe { self.allocator.deallocate_raw(self.start, size, mem::align_of::<usize>()) }
+            unsafe { 
+                self.allocator.deallocate_raw(Block {
+                    ptr: self.start, 
+                    size: size,
+                    align: mem::align_of::<usize>()
+                }) 
+            }
         }
     }
 }
