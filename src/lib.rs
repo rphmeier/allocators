@@ -135,6 +135,23 @@ pub unsafe trait Allocator {
     unsafe fn deallocate_raw(&self, blk: Block);
 }
 
+/// An allocator that knows which blocks have been issued by it.
+pub trait OwningAllocator: Allocator {
+    /// Whether this allocator owns this allocated value. 
+    fn owns<'a, T, A: Allocator>(&self, val: &Allocated<'a, T, A>) -> bool {
+        let blk = Block {
+            ptr: val.item as *mut u8,
+            size: val.size,
+            align: val.align,
+        };
+
+        self.owns_block(&blk)
+    }
+
+    /// Whether this allocator owns the block passed to it.
+    fn owns_block(&self, blk: &Block) -> bool;
+}
+
 /// A block of memory created by an allocator.
 pub struct Block {
     ptr: *mut u8,

@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::mem;
 use std::ptr;
 
-use super::{Allocator, AllocatorError, Block, HeapAllocator, HEAP};
+use super::{Allocator, AllocatorError, Block, HeapAllocator, HEAP, OwningAllocator};
 
 /// A scoped linear allocator.
 pub struct ScopedAllocator<'parent, A: 'parent + Allocator> {
@@ -54,7 +54,7 @@ impl<'parent, A: Allocator> ScopedAllocator<'parent, A> {
             current: self.current.clone(),
             end: self.end,
             root: false,
-            start: self.start,
+            start: old,
         };
 
         // set the current pointer to null as a flag to indicate
@@ -105,6 +105,14 @@ unsafe impl<'a, A: Allocator> Allocator for ScopedAllocator<'a, A> {
         if !self.is_scoped() && blk.ptr().offset(blk.size() as isize) == current_ptr {
             self.current.set(blk.ptr());
         }
+    }
+}
+
+impl<'a, A: Allocator> OwningAllocator for ScopedAllocator<'a, A> {
+    fn owns_block(&self, blk: &Block) -> bool {
+        let ptr = blk.ptr();
+
+        ptr >= self.start && ptr <= self.end
     }
 }
 
@@ -187,5 +195,19 @@ mod tests {
         let alloc = ScopedAllocator::new(8_000_000).unwrap();
         // this would smash the stack otherwise.
         let _big = in alloc.make_place().unwrap() { [0u8; 8_000_000] };
+    }
+
+    #[test]
+    fn owning() {
+        let alloc = ScopedAllocator::new(64).unwrap();
+
+        let val = alloc.allocate(1i32).unwrap();
+        assert!(alloc.owns(&val));
+
+        alloc.scope(|inner| {
+            let in_val = inner.allocate(2i32).unwrap();
+            assert!(inner.owns(&in_val));
+            assert!(!inner.owns(&val));
+        }).unwrap();
     }
 }
