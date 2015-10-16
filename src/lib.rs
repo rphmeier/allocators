@@ -1,12 +1,11 @@
-//! A scoped linear allocator.
-//! This is useful for reusing a block of memory for temporary allocations within
-//! a tight inner loop. Multiple nested scopes can be used if desired.
+//! Custom memory allocators and utilities for using them.
 //!
 //! # Examples
 //! ```rust
 //! #![feature(placement_in_syntax)]
 //!
-//! use scoped_allocator::{Allocator, ScopedAllocator};
+//! use std::io;
+//! use allocators::{Allocator, ScopedAllocator, OwningAllocator, ProxyAllocator};
 //!
 //! #[derive(Debug)]
 //! struct Bomb(u8);
@@ -16,20 +15,29 @@
 //!         println!("Boom! {}", self.0);
 //!     }
 //! }
-//! // new scoped allocator with a kilobyte of memory.
-//! let alloc = ScopedAllocator::new(1024).unwrap();
+//! // new scoped allocator with 4 kilobytes of memory.
+//! let alloc = ScopedAllocator::new(4 * 1024).unwrap();
 //!
 //! alloc.scope(|inner| {
 //!     let mut bombs = Vec::new();
-//!     // allocate_val makes the value on the stack first.
+//!     // allocate makes the value on the stack first.
 //!     for i in 0..100 { bombs.push(inner.allocate(Bomb(i)).unwrap())}
+//!     // there's also in-place allocation!
+//!     let bomb_101 = in inner.make_place().unwrap() { Bomb(101) };
 //!     // watch the bombs go off!
 //! });
 //!
-//! // Allocators also have placement-in syntax.
-//! let my_int = in alloc.make_place().unwrap() { 23 };
-//! println!("My int: {}", *my_int);
 //!
+//! // You can make allocators backed by other allocators.
+//! {
+//!     let secondary_alloc = ScopedAllocator::new_from(&alloc, 1024).unwrap();
+//!     let mut val = secondary_alloc.allocate(0i32).unwrap();
+//!     *val = 1;
+//! }
+//!
+//! // Let's wrap our allocator in a proxy to log what it's doing.
+//! let proxied = ProxyAllocator::new(alloc, io::stdout());
+//! let logged_allocation = proxied.allocate([0u8; 32]).unwrap();
 //! ```
 
 #![feature(
@@ -58,6 +66,8 @@ extern crate alloc;
 
 pub mod composable;
 pub mod scoped;
+
+pub use composable::*;
 pub use scoped::ScopedAllocator;
 
 /// A custom memory allocator.
@@ -66,7 +76,7 @@ pub unsafe trait Allocator {
     ///
     /// # Examples
     /// ```rust
-    /// use scoped_allocator::{Allocator, Allocated};
+    /// use allocators::{Allocator, Allocated};
     /// fn alloc_array<A: Allocator>(allocator: &A) -> Allocated<[u8; 1000], A> {
     ///     allocator.allocate([0; 1000]).ok().unwrap()
     /// }
@@ -93,7 +103,7 @@ pub unsafe trait Allocator {
     /// # Examples
     /// ```rust
     /// #![feature(placement_in_syntax)]
-    /// use scoped_allocator::{Allocator, Allocated};
+    /// use allocators::{Allocator, Allocated};
     /// fn alloc_array<A: Allocator>(allocator: &A) -> Allocated<[u8; 1000], A> {
     ///     // if 1000 bytes were enough to smash the stack, this would still work.
     ///     in allocator.make_place().unwrap() { [0; 1000] }
@@ -151,6 +161,12 @@ pub trait OwningAllocator: Allocator {
 
     /// Whether this allocator owns the block passed to it.
     fn owns_block(&self, blk: &Block) -> bool;
+
+    /// Joins this allocator with a fallback allocator.
+    fn with_fallback<O: OwningAllocator>(self, other: O) -> FallbackAllocator<Self, O>
+    where Self: Sized {
+        FallbackAllocator::new(self, other)
+    }
 }
 
 /// A block of memory created by an allocator.

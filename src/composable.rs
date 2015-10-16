@@ -1,5 +1,9 @@
 /// This module contains some composable building blocks to build allocator chains.
 
+use std::cell::RefCell;
+use std::error::Error;
+use std::io::Write;
+
 use super::{Allocator, AllocatorError, Block, OwningAllocator};
 
 /// This allocator always fails.
@@ -63,9 +67,52 @@ impl<M: OwningAllocator, F: OwningAllocator> OwningAllocator for FallbackAllocat
     }
 }
 
+/// This wraps an allocator and a writer, logging all allocations
+/// and deallocations.
+pub struct ProxyAllocator<A, W> {
+    alloc: A,
+    writer: RefCell<W>,
+}
+
+impl<A: Allocator, W: Write> ProxyAllocator<A, W> {
+    /// Create a new proxy allocator.
+    pub fn new(alloc: A, writer: W) -> Self {
+        ProxyAllocator {
+            alloc: alloc,
+            writer: RefCell::new(writer),
+        }
+    }
+}
+
+unsafe impl<A: Allocator, W: Write> Allocator for ProxyAllocator<A, W> {
+    #[allow(unused_must_use)]
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
+        let mut writer = self.writer.borrow_mut();
+        match self.alloc.allocate_raw(size, align) {
+            Ok(blk) => {
+                writeln!(writer, "Successfully allocated {} bytes with align {}", size, align);
+                writeln!(writer, "Returned pointer is {:x}", blk.ptr() as usize);
+                Ok(blk)
+            }
+            Err(err) => {
+                writeln!(writer, "Failed to allocate {} bytes.", size);
+                writeln!(writer, "Error: {}", err.description());
+                Err(err)
+            }
+        }
+    }
+
+    #[allow(unused_must_use)]
+    unsafe fn deallocate_raw(&self, blk: Block) {
+        let mut writer = self.writer.borrow_mut();
+        write!(writer, "Deallocating block at pointer {:x} with size {} and align {}",
+            blk.ptr() as usize, blk.size(), blk.align());
+        self.alloc.deallocate_raw(blk);
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::*;
 
     #[test]
