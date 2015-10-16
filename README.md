@@ -1,6 +1,8 @@
 # Allocators 
 [![Build Status](https://travis-ci.org/rphmeier/allocators.svg)](https://travis-ci.org/rphmeier/allocators)
 
+## [Documentation](https://rphmeier.github.io/allocators/allocators/)
+
 This crate provides a different memory allocators, as well as an 
 `Allocator` trait for creating other custom allocators. A main goal of allocators is composability. For this reason, it also provides some composable primitives to be used as building blocks for chained allocators. This crate leans heavily on unsafe/unstable code at the moment, and should be considered very experimental. 
 
