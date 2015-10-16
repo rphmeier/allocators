@@ -14,7 +14,7 @@ This is useful for reusing a block of memory for temporary allocations in a tigh
 
 ```rust
 #![feature(placement_in_syntax)]
-use allocators::{Allocator, ScopedAllocator};
+use allocators::{Allocator, Scoped};
 #[derive(Debug)]
 struct Bomb(u8);
 impl Drop for Bomb {
@@ -23,14 +23,14 @@ impl Drop for Bomb {
     }
 }
 // new scoped allocator with a kilobyte of memory.
-let alloc = ScopedAllocator::new(1024).unwrap();
+let alloc = Scoped::new(1024).unwrap();
 alloc.scope(|inner| {
     let mut bombs = Vec::new();
     // allocate_val makes the value on the stack first.
-    for i in 0..100 { bombs.push(inner.allocate_val(Bomb(i)).unwrap())}
+    for i in 0..100 { bombs.push(inner.allocate(Bomb(i)).unwrap())}
     // watch the bombs go off!
 });
 // Allocators also have placement-in syntax.
-let my_int = in alloc.allocate().unwrap() { 23 };
+let my_int = in alloc.make_place().unwrap() { 23 };
 println!("My int: {}", *my_int);
 ```
