@@ -5,7 +5,7 @@
 //! #![feature(placement_in_syntax)]
 //!
 //! use std::io;
-//! use allocators::{Allocator, ScopedAllocator, OwningAllocator, ProxyAllocator};
+//! use allocators::{Allocator, Scoped, BlockOwner, Proxy};
 //!
 //! #[derive(Debug)]
 //! struct Bomb(u8);
@@ -16,7 +16,7 @@
 //!     }
 //! }
 //! // new scoped allocator with 4 kilobytes of memory.
-//! let alloc = ScopedAllocator::new(4 * 1024).unwrap();
+//! let alloc = Scoped::new(4 * 1024).unwrap();
 //!
 //! alloc.scope(|inner| {
 //!     let mut bombs = Vec::new();
@@ -30,13 +30,13 @@
 //!
 //! // You can make allocators backed by other allocators.
 //! {
-//!     let secondary_alloc = ScopedAllocator::new_from(&alloc, 1024).unwrap();
+//!     let secondary_alloc = Scoped::new_from(&alloc, 1024).unwrap();
 //!     let mut val = secondary_alloc.allocate(0i32).unwrap();
 //!     *val = 1;
 //! }
 //!
 //! // Let's wrap our allocator in a proxy to log what it's doing.
-//! let proxied = ProxyAllocator::new(alloc, io::stdout());
+//! let proxied = Proxy::new(alloc, io::stdout());
 //! let logged_allocation = proxied.allocate([0u8; 32]).unwrap();
 //! ```
 
@@ -68,7 +68,7 @@ pub mod composable;
 pub mod scoped;
 
 pub use composable::*;
-pub use scoped::ScopedAllocator;
+pub use scoped::Scoped;
 
 /// A custom memory allocator.
 pub unsafe trait Allocator {
@@ -147,7 +147,7 @@ pub unsafe trait Allocator {
 }
 
 /// An allocator that knows which blocks have been issued by it.
-pub trait OwningAllocator: Allocator {
+pub trait BlockOwner: Allocator {
     /// Whether this allocator owns this allocated value. 
     fn owns<'a, T, A: Allocator>(&self, val: &Allocated<'a, T, A>) -> bool {
         let blk = Block {
@@ -163,9 +163,12 @@ pub trait OwningAllocator: Allocator {
     fn owns_block(&self, blk: &Block) -> bool;
 
     /// Joins this allocator with a fallback allocator.
-    fn with_fallback<O: OwningAllocator>(self, other: O) -> FallbackAllocator<Self, O>
+    // TODO: Maybe not the right place for this?
+    // Right now I've been more focused on shaking out the
+    // specifics of allocation than crafting a fluent API.
+    fn with_fallback<O: BlockOwner>(self, other: O) -> Fallback<Self, O>
     where Self: Sized {
-        FallbackAllocator::new(self, other)
+        Fallback::new(self, other)
     }
 }
 
@@ -324,7 +327,7 @@ impl<'a, T: ?Sized, A: Allocator> Drop for Allocated<'a, T, A> {
 
 /// A place for allocating into.
 /// This is only used for in-place allocation,
-/// e.g. let val = in (alloc.allocate().unwrap())
+/// e.g. `let val = in (alloc.make_place().unwrap())`
 pub struct Place<'a, T: 'a, A: 'a + Allocator> {
     allocator: &'a A,
     ptr: *mut T,

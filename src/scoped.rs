@@ -1,11 +1,14 @@
+//! A scoped linear allocator. This is something of a cross between a stack allocator
+//! and a traditional linear allocator.
+
 use std::cell::Cell;
 use std::mem;
 use std::ptr;
 
-use super::{Allocator, AllocatorError, Block, HeapAllocator, HEAP, OwningAllocator};
+use super::{Allocator, AllocatorError, Block, HeapAllocator, HEAP, BlockOwner};
 
 /// A scoped linear allocator.
-pub struct ScopedAllocator<'parent, A: 'parent + Allocator> {
+pub struct Scoped<'parent, A: 'parent + Allocator> {
     allocator: &'parent A,
     current: Cell<*mut u8>,
     end: *mut u8,
@@ -13,19 +16,19 @@ pub struct ScopedAllocator<'parent, A: 'parent + Allocator> {
     start: *mut u8,
 }
 
-impl ScopedAllocator<'static, HeapAllocator> {
-    /// Creates a new `ScopedAllocator` backed by `size` bytes from the heap.
+impl Scoped<'static, HeapAllocator> {
+    /// Creates a new `Scoped` backed by `size` bytes from the heap.
     pub fn new(size: usize) -> Result<Self, AllocatorError> {
-        ScopedAllocator::new_from(HEAP, size)
+        Scoped::new_from(HEAP, size)
     }
 }
 
-impl<'parent, A: Allocator> ScopedAllocator<'parent, A> {
-    /// Creates a new `ScopedAllocator` backed by `size` bytes from the allocator supplied.
+impl<'parent, A: Allocator> Scoped<'parent, A> {
+    /// Creates a new `Scoped` backed by `size` bytes from the allocator supplied.
     pub fn new_from(alloc: &'parent A, size: usize) -> Result<Self, AllocatorError> {
         // Create a memory buffer with the desired size and maximal align from the parent.
         match unsafe { alloc.allocate_raw(size, mem::align_of::<usize>()) } {
-            Ok(block) => Ok(ScopedAllocator {
+            Ok(block) => Ok(Scoped {
                 allocator: alloc,
                 current: Cell::new(block.ptr()),
                 end: unsafe { block.ptr().offset(block.size() as isize) },
@@ -49,7 +52,7 @@ impl<'parent, A: Allocator> ScopedAllocator<'parent, A> {
 
         let mut f = f;
         let old = self.current.get();
-        let alloc = ScopedAllocator {
+        let alloc = Scoped {
             allocator: self.allocator,
             current: self.current.clone(),
             end: self.end,
@@ -73,7 +76,7 @@ impl<'parent, A: Allocator> ScopedAllocator<'parent, A> {
     }
 }
 
-unsafe impl<'a, A: Allocator> Allocator for ScopedAllocator<'a, A> {
+unsafe impl<'a, A: Allocator> Allocator for Scoped<'a, A> {
     unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
         if self.is_scoped() {
             return Err(AllocatorError::AllocatorSpecific("Called allocate on already scoped \
@@ -108,7 +111,7 @@ unsafe impl<'a, A: Allocator> Allocator for ScopedAllocator<'a, A> {
     }
 }
 
-impl<'a, A: Allocator> OwningAllocator for ScopedAllocator<'a, A> {
+impl<'a, A: Allocator> BlockOwner for Scoped<'a, A> {
     fn owns_block(&self, blk: &Block) -> bool {
         let ptr = blk.ptr();
 
@@ -116,8 +119,8 @@ impl<'a, A: Allocator> OwningAllocator for ScopedAllocator<'a, A> {
     }
 }
 
-impl<'a, A: Allocator> Drop for ScopedAllocator<'a, A> {
-    /// Drops the `ScopedAllocator`
+impl<'a, A: Allocator> Drop for Scoped<'a, A> {
+    /// Drops the `Scoped`
     fn drop(&mut self) {
         let size = self.end as usize - self.start as usize;
         // only free if this allocator is the root to make sure
@@ -144,7 +147,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn use_outer() {
-        let alloc = ScopedAllocator::new(4).unwrap();
+        let alloc = Scoped::new(4).unwrap();
         let mut outer_val = alloc.allocate(0i32).unwrap();
         alloc.scope(|_inner| {
             // using outer allocator is dangerous and should fail.
@@ -163,14 +166,14 @@ mod tests {
             }
         }
 
-        let alloc = ScopedAllocator::new(4).unwrap();
+        let alloc = Scoped::new(4).unwrap();
         let my_foo: Allocated<Any, _> = alloc.allocate(Bomb).unwrap();
         let _: Allocated<Bomb, _> = my_foo.downcast().ok().unwrap();
     }
 
     #[test]
     fn scope_scope() {
-        let alloc = ScopedAllocator::new(64).unwrap();
+        let alloc = Scoped::new(64).unwrap();
         let _ = alloc.allocate(0).unwrap();
         alloc.scope(|inner| {
                  let _ = inner.allocate(32);
@@ -185,21 +188,21 @@ mod tests {
     #[test]
     fn out_of_memory() {
         // allocate more memory than the allocator has.
-        let alloc = ScopedAllocator::new(0).unwrap();
+        let alloc = Scoped::new(0).unwrap();
         let (err, _) = alloc.allocate(1i32).err().unwrap();
         assert_eq!(err, AllocatorError::OutOfMemory);
     }
 
     #[test]
     fn placement_in() {
-        let alloc = ScopedAllocator::new(8_000_000).unwrap();
+        let alloc = Scoped::new(8_000_000).unwrap();
         // this would smash the stack otherwise.
         let _big = in alloc.make_place().unwrap() { [0u8; 8_000_000] };
     }
 
     #[test]
     fn owning() {
-        let alloc = ScopedAllocator::new(64).unwrap();
+        let alloc = Scoped::new(64).unwrap();
 
         let val = alloc.allocate(1i32).unwrap();
         assert!(alloc.owns(&val));

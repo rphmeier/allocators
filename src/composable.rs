@@ -1,10 +1,10 @@
-/// This module contains some composable building blocks to build allocator chains.
+//! This module contains some composable building blocks to build allocator chains.
 
 use std::cell::RefCell;
 use std::error::Error;
 use std::io::Write;
 
-use super::{Allocator, AllocatorError, Block, OwningAllocator};
+use super::{Allocator, AllocatorError, Block, BlockOwner};
 
 /// This allocator always fails.
 /// It will panic if you try to deallocate with it.
@@ -20,7 +20,7 @@ unsafe impl Allocator for NullAllocator {
     }
 }
 
-impl OwningAllocator for NullAllocator {
+impl BlockOwner for NullAllocator {
     fn owns_block(&self, _blk: &Block) -> bool {
         false
     }
@@ -29,22 +29,22 @@ impl OwningAllocator for NullAllocator {
 /// This allocator has a main and a fallback allocator.
 /// It will always attempt to allocate first with the main allocator,
 /// and second with the fallback.
-pub struct FallbackAllocator<M: OwningAllocator, F: OwningAllocator> {
+pub struct Fallback<M: BlockOwner, F: BlockOwner> {
     main: M,
     fallback: F,
 }
 
-impl<M: OwningAllocator, F: OwningAllocator> FallbackAllocator<M, F> {
-    /// Create a new `FallbackAllocator`
+impl<M: BlockOwner, F: BlockOwner> Fallback<M, F> {
+    /// Create a new `Fallback`
     pub fn new(main: M, fallback: F) -> Self {
-        FallbackAllocator {
+        Fallback {
             main: main,
             fallback: fallback,
         }
     }
 }
 
-unsafe impl<M: OwningAllocator, F: OwningAllocator> Allocator for FallbackAllocator<M, F> {
+unsafe impl<M: BlockOwner, F: BlockOwner> Allocator for Fallback<M, F> {
     unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
         match self.main.allocate_raw(size, align) {
             Ok(blk) => Ok(blk),
@@ -61,7 +61,7 @@ unsafe impl<M: OwningAllocator, F: OwningAllocator> Allocator for FallbackAlloca
     }
 }
 
-impl<M: OwningAllocator, F: OwningAllocator> OwningAllocator for FallbackAllocator<M, F> {
+impl<M: BlockOwner, F: BlockOwner> BlockOwner for Fallback<M, F> {
     fn owns_block(&self, blk: &Block) -> bool {
         self.main.owns_block(blk) || self.fallback.owns_block(blk)
     }
@@ -69,22 +69,22 @@ impl<M: OwningAllocator, F: OwningAllocator> OwningAllocator for FallbackAllocat
 
 /// This wraps an allocator and a writer, logging all allocations
 /// and deallocations.
-pub struct ProxyAllocator<A, W> {
+pub struct Proxy<A, W> {
     alloc: A,
     writer: RefCell<W>,
 }
 
-impl<A: Allocator, W: Write> ProxyAllocator<A, W> {
+impl<A: Allocator, W: Write> Proxy<A, W> {
     /// Create a new proxy allocator.
     pub fn new(alloc: A, writer: W) -> Self {
-        ProxyAllocator {
+        Proxy {
             alloc: alloc,
             writer: RefCell::new(writer),
         }
     }
 }
 
-unsafe impl<A: Allocator, W: Write> Allocator for ProxyAllocator<A, W> {
+unsafe impl<A: Allocator, W: Write> Allocator for Proxy<A, W> {
     #[allow(unused_must_use)]
     unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
         let mut writer = self.writer.borrow_mut();
