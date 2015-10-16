@@ -92,11 +92,7 @@ unsafe impl<'a, A: Allocator> Allocator for Scoped<'a, A> {
             Err(AllocatorError::OutOfMemory)
         } else {
             self.current.set(end_ptr);
-            Ok(Block {
-                ptr: aligned_ptr,
-                size: size,
-                align: align,
-            })
+            Ok(Block::new(aligned_ptr, size, align))
         }
     }
 
@@ -128,11 +124,9 @@ impl<'a, A: Allocator> Drop for Scoped<'a, A> {
         // are called in case of unwind
         if self.root && size > 0 {
             unsafe { 
-                self.allocator.deallocate_raw(Block {
-                    ptr: self.start, 
-                    size: size,
-                    align: mem::align_of::<usize>()
-                }) 
+                self.allocator.deallocate_raw(
+                    Block::new(self.start, size, mem::align_of::<usize>())
+                ) 
             }
         }
     }
@@ -140,8 +134,6 @@ impl<'a, A: Allocator> Drop for Scoped<'a, A> {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
-
     use super::super::*;
 
     #[test]
@@ -154,21 +146,6 @@ mod tests {
                  outer_val = alloc.allocate(1i32).unwrap();
              })
              .unwrap();
-    }
-
-    #[test]
-    fn unsizing() {
-        #[derive(Debug)]
-        struct Bomb;
-        impl Drop for Bomb {
-            fn drop(&mut self) {
-                println!("Boom")
-            }
-        }
-
-        let alloc = Scoped::new(4).unwrap();
-        let my_foo: Allocated<Any, _> = alloc.allocate(Bomb).unwrap();
-        let _: Allocated<Bomb, _> = my_foo.downcast().ok().unwrap();
     }
 
     #[test]

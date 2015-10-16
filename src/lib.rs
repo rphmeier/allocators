@@ -166,24 +166,35 @@ pub trait BlockOwner: Allocator {
 
 /// A block of memory created by an allocator.
 // TODO: should blocks be tied to lifetimes? seems good for safety!
-pub struct Block {
+pub struct Block<'a> {
     ptr: *mut u8,
     size: usize,
     align: usize,
+    _marker: PhantomData<&'a [u8]>
 }
 
-impl Block {
+impl<'a> Block<'a> {
+    pub fn new(ptr: *mut u8, size: usize, align: usize) -> Self {
+        Block {
+            ptr: ptr,
+            size: size,
+            align: align,
+            _marker: PhantomData,
+        }
+    }
+
     pub fn ptr(&self) -> *mut u8 { self.ptr }
     pub fn size(&self) -> usize { self.size }
     pub fn align(&self) -> usize { self.align }
+}
 
-    // private clone implementation since
-    // having a public one is a little scary for now.
-    fn clone(&self) -> Block {
+impl<'a> Clone for Block<'a> {
+    fn clone(&self) -> Block<'a> {
         Block {
             ptr: self.ptr(),
             size: self.size(),
             align: self.align(),
+            _marker: self._marker
         }
     }
 }
@@ -241,7 +252,7 @@ unsafe impl Allocator for HeapAllocator {
         if ptr.is_null() {
             Err(AllocatorError::OutOfMemory)
         } else {
-            Ok(Block { ptr: ptr, size: size, align: align} )
+            Ok(Block::new(ptr, size, align))
         }
     }
 
@@ -254,7 +265,7 @@ unsafe impl Allocator for HeapAllocator {
 pub struct Allocated<'a, T: 'a + ?Sized, A: 'a + Allocator> {
     item: *mut T,
     allocator: &'a A,
-    block: Block,
+    block: Block<'a>,
 }
 
 impl<'a, T: ?Sized, A: Allocator> Deref for Allocated<'a, T, A> {
@@ -323,7 +334,7 @@ impl<'a, T: ?Sized, A: Allocator> Drop for Allocated<'a, T, A> {
 /// e.g. `let val = in (alloc.make_place().unwrap())`
 pub struct Place<'a, T: 'a, A: 'a + Allocator> {
     allocator: &'a A,
-    block: Block,
+    block: Block<'a>,
     _marker: PhantomData<T>,
 }
 
@@ -375,6 +386,9 @@ fn align_forward(ptr: *mut u8, align: usize) -> *mut u8 {
 
 #[cfg(test)]
 mod tests {
+        
+    use std::any::Any;
+
     use super::*;
 
     #[test]
@@ -390,5 +404,19 @@ mod tests {
     fn heap_in_place() {
         let big = in HEAP.make_place().unwrap() { [0u8; 8_000_000] };
         assert_eq!(big.len(), 8_000_000);
+    }
+
+    #[test]
+    fn unsizing() {
+        #[derive(Debug)]
+        struct Bomb;
+        impl Drop for Bomb {
+            fn drop(&mut self) {
+                println!("Boom")
+            }
+        }
+
+        let my_foo: Allocated<Any, _> = HEAP.allocate(Bomb).unwrap();
+        let _: Allocated<Bomb, _> = my_foo.downcast().ok().unwrap();
     }
 }
