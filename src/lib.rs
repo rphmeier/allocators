@@ -48,14 +48,14 @@
     placement_new_protocol,
     placement_in_syntax,
     raw,
-    unsize
+    unsize,
 )]
 
 use std::any::Any;
 use std::borrow::{Borrow, BorrowMut};
 use std::error::Error;
 use std::fmt;
-use std::marker::Unsize;
+use std::marker::{PhantomData, Unsize};
 use std::mem;
 use std::ops::Place as StdPlace;
 use std::ops::{CoerceUnsized, Deref, DerefMut, InPlace, Placer};
@@ -117,10 +117,8 @@ pub unsafe trait Allocator {
             Ok(blk) => {
                 Ok(Place {
                     allocator: self,
-                    ptr: blk.ptr() as *mut T,
-                    size: blk.size(),
-                    align: blk.align(),
-                    finalized: false,
+                    block: blk,
+                    _marker: PhantomData
                 })
             }
             Err(e) => Err(e),
@@ -150,13 +148,7 @@ pub unsafe trait Allocator {
 pub trait BlockOwner: Allocator {
     /// Whether this allocator owns this allocated value. 
     fn owns<'a, T, A: Allocator>(&self, val: &Allocated<'a, T, A>) -> bool {
-        let blk = Block {
-            ptr: val.item as *mut u8,
-            size: val.size,
-            align: val.align,
-        };
-
-        self.owns_block(&blk)
+        self.owns_block(&val.block)
     }
 
     /// Whether this allocator owns the block passed to it.
@@ -173,6 +165,7 @@ pub trait BlockOwner: Allocator {
 }
 
 /// A block of memory created by an allocator.
+// TODO: should blocks be tied to lifetimes? seems good for safety!
 pub struct Block {
     ptr: *mut u8,
     size: usize,
@@ -180,9 +173,19 @@ pub struct Block {
 }
 
 impl Block {
-    fn ptr(&self) -> *mut u8 { self.ptr }
-    fn size(&self) -> usize { self.size }
-    fn align(&self) -> usize { self.align }
+    pub fn ptr(&self) -> *mut u8 { self.ptr }
+    pub fn size(&self) -> usize { self.size }
+    pub fn align(&self) -> usize { self.align }
+
+    // private clone implementation since
+    // having a public one is a little scary for now.
+    fn clone(&self) -> Block {
+        Block {
+            ptr: self.ptr(),
+            size: self.size(),
+            align: self.align(),
+        }
+    }
 }
 
 /// Errors that can occur while creating an allocator
@@ -238,11 +241,7 @@ unsafe impl Allocator for HeapAllocator {
         if ptr.is_null() {
             Err(AllocatorError::OutOfMemory)
         } else {
-            Ok(Block {
-                ptr: ptr,
-                size: size,
-                align: align,
-            })
+            Ok(Block { ptr: ptr, size: size, align: align} )
         }
     }
 
@@ -255,8 +254,7 @@ unsafe impl Allocator for HeapAllocator {
 pub struct Allocated<'a, T: 'a + ?Sized, A: 'a + Allocator> {
     item: *mut T,
     allocator: &'a A,
-    size: usize,
-    align: usize,
+    block: Block,
 }
 
 impl<'a, T: ?Sized, A: Allocator> Deref for Allocated<'a, T, A> {
@@ -283,10 +281,9 @@ impl<'a, A: Allocator> Allocated<'a, Any, A> {
         if self.is::<T>() {
             let obj: TraitObject = unsafe { mem::transmute(self.item as *mut Any) };
             let new_allocated = Allocated {
-                item: unsafe { mem::transmute(obj.data) },
+                item: obj.data as *mut T,
                 allocator: self.allocator,
-                size: self.size,
-                align: self.align,
+                block: self.block.clone(),
             };
             mem::forget(self);
             Ok(new_allocated)
@@ -314,12 +311,8 @@ impl<'a, T: ?Sized, A: Allocator> Drop for Allocated<'a, T, A> {
         use std::intrinsics::drop_in_place;
         unsafe {
             drop_in_place(self.item);
-
-            self.allocator.deallocate_raw(Block {
-                ptr: self.item as *mut u8, 
-                size: self.size,
-                align: self.align
-            });
+;
+            self.allocator.deallocate_raw(self.block.clone());
         }
 
     }
@@ -330,10 +323,8 @@ impl<'a, T: ?Sized, A: Allocator> Drop for Allocated<'a, T, A> {
 /// e.g. `let val = in (alloc.make_place().unwrap())`
 pub struct Place<'a, T: 'a, A: 'a + Allocator> {
     allocator: &'a A,
-    ptr: *mut T,
-    size: usize,
-    align: usize,
-    finalized: bool
+    block: Block,
+    _marker: PhantomData<T>,
 }
 
 impl<'a, T: 'a, A: 'a + Allocator> Placer<T> for Place<'a, T, A> {
@@ -343,38 +334,35 @@ impl<'a, T: 'a, A: 'a + Allocator> Placer<T> for Place<'a, T, A> {
 
 impl<'a, T: 'a, A: 'a + Allocator> InPlace<T> for Place<'a, T, A> {
     type Owner = Allocated<'a, T, A>;
-    unsafe fn finalize(mut self) -> Self::Owner {
-        self.finalized = true;
-        Allocated {
-            item: self.ptr,
+    unsafe fn finalize(self) -> Self::Owner {
+        let allocated = Allocated {
+            item: self.block.ptr() as *mut T,
             allocator: self.allocator,
-            size: self.size,
-            align: self.size,
-        }
+            block: self.block.clone()
+        };
+
+        mem::forget(self);
+        allocated
     }
 }
 
 impl<'a, T: 'a, A: 'a + Allocator> StdPlace<T> for Place<'a, T, A> {
     fn pointer(&mut self) -> *mut T {
-        self.ptr
+        self.block.ptr() as *mut T
     }
 }
 
 impl<'a, T: 'a, A: 'a + Allocator> Drop for Place<'a, T, A> {
     #[inline]
     fn drop(&mut self) {
-        // almost identical to Allocated::Drop, but we only drop if this
-        // was never finalized. If it was finalized, an Allocated manages this memory.
-        use std::intrinsics::drop_in_place;
-        if !self.finalized { unsafe {
-            drop_in_place(self.ptr);
-
-            self.allocator.deallocate_raw(Block {
-                ptr: self.ptr as *mut u8,
-                size: self.size,
-                align: self.align,
-            });
-        } }
+        // almost identical to Allocated::Drop, but we don't drop
+        // the value in place. This is because if the finalize
+        // method was never called, that means the expression
+        // to create the value failed, and the memory at the
+        // pointer is still uninitialized.
+        unsafe {
+            self.allocator.deallocate_raw(self.block.clone());
+        }
 
     }
 }
