@@ -1,5 +1,5 @@
 # Allocators 
-[![Build Status](https://travis-ci.org/rphmeier/allocators.svg)](https://travis-ci.org/rphmeier/allocators)
+[![Build Status](https://travis-ci.org/rphmeier/allocators.svg)](https://travis-ci.org/rphmeier/allocators) [![Crates.io](https://img.shields.io/crates/v/allocators.svg)](https://crates.io/crates/allocators)
 
 ## [Documentation](https://rphmeier.github.io/allocators/allocators/)
 
