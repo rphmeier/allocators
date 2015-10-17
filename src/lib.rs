@@ -174,6 +174,7 @@ pub struct Block<'a> {
 }
 
 impl<'a> Block<'a> {
+    /// Create a new block from the supplied parts.
     pub fn new(ptr: *mut u8, size: usize, align: usize) -> Self {
         Block {
             ptr: ptr,
@@ -183,9 +184,26 @@ impl<'a> Block<'a> {
         }
     }
 
+    /// Creates an empty block.
+    pub fn empty() -> Self {
+        Block {
+            ptr: heap::EMPTY as *mut u8,
+            size: 0,
+            align: 0,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Get the pointer from this block.
     pub fn ptr(&self) -> *mut u8 { self.ptr }
+    /// Get the size of this block.
     pub fn size(&self) -> usize { self.size }
+    /// Get the align of this block.
     pub fn align(&self) -> usize { self.align }
+    /// Whether this block is empty.
+    pub fn is_empty(&self) -> bool {
+        self.ptr as *mut () == heap::EMPTY || self.size == 0
+    }
 }
 
 impl<'a> Clone for Block<'a> {
@@ -243,12 +261,9 @@ pub const HEAP: &'static HeapAllocator = &HeapAllocator;
 
 unsafe impl Allocator for HeapAllocator {
     unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
-        let ptr = if size != 0 {
-            heap::allocate(size, align)
-        } else {
-            heap::EMPTY as *mut u8
-        };
+        if size == 0 { return Ok(Block::empty()) }
 
+        let ptr = heap::allocate(size, align);
         if ptr.is_null() {
             Err(AllocatorError::OutOfMemory)
         } else {
@@ -257,7 +272,9 @@ unsafe impl Allocator for HeapAllocator {
     }
 
     unsafe fn deallocate_raw(&self, blk: Block) {
-        heap::deallocate(blk.ptr(), blk.size(), blk.align())
+        if !blk.is_empty() { 
+            heap::deallocate(blk.ptr(), blk.size(), blk.align())
+        }
     }
 }
 

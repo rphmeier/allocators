@@ -5,7 +5,7 @@ use std::cell::Cell;
 use std::mem;
 use std::ptr;
 
-use super::{Allocator, AllocatorError, Block, HeapAllocator, HEAP, BlockOwner};
+use super::{Allocator, AllocatorError, Block, BlockOwner, HeapAllocator, HEAP};
 
 /// A scoped linear allocator.
 pub struct Scoped<'parent, A: 'parent + Allocator> {
@@ -84,6 +84,8 @@ unsafe impl<'a, A: Allocator> Allocator for Scoped<'a, A> {
                                                              .into()))
         }
 
+        if size == 0 { return Ok(Block::empty()) }
+
         let current_ptr = self.current.get();
         let aligned_ptr = super::align_forward(current_ptr, align);
         let end_ptr = aligned_ptr.offset(size as isize);
@@ -98,6 +100,7 @@ unsafe impl<'a, A: Allocator> Allocator for Scoped<'a, A> {
 
     #[allow(unused_variables)]
     unsafe fn deallocate_raw(&self, blk: Block) {
+        if blk.is_empty() || blk.ptr().is_null() { return }
         // no op for this unless this is the last allocation.
         // The memory gets reused when the scope is cleared.
         let current_ptr = self.current.get();
