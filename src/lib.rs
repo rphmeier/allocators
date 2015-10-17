@@ -65,9 +65,11 @@ use alloc::heap;
 extern crate alloc;
 
 pub mod composable;
+pub mod freelist;
 pub mod scoped;
 
 pub use composable::*;
+pub use freelist::FreeList;
 pub use scoped::Scoped;
 
 /// A custom memory allocator.
