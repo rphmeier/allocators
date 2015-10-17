@@ -272,13 +272,13 @@ impl<'a, T: ?Sized, A: Allocator> Deref for Allocated<'a, T, A> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        unsafe { mem::transmute(self.item) }
+        unsafe { &*self.item }
     }
 }
 
 impl<'a, T: ?Sized, A: Allocator> DerefMut for Allocated<'a, T, A> {
     fn deref_mut(&mut self) -> &mut T {
-        unsafe { mem::transmute(self.item) }
+        unsafe { &mut *self.item }
     }
 }
 
@@ -290,7 +290,7 @@ impl<'a, A: Allocator> Allocated<'a, Any, A> {
     pub fn downcast<T: Any>(self) -> Result<Allocated<'a, T, A>, Allocated<'a, Any, A>> {
         use std::raw::TraitObject;
         if self.is::<T>() {
-            let obj: TraitObject = unsafe { mem::transmute(self.item as *mut Any) };
+            let obj: TraitObject = unsafe { mem::transmute::<*mut Any, TraitObject>(self.item) };
             let new_allocated = Allocated {
                 item: obj.data as *mut T,
                 allocator: self.allocator,
@@ -331,7 +331,7 @@ impl<'a, T: ?Sized, A: Allocator> Drop for Allocated<'a, T, A> {
 
 /// A place for allocating into.
 /// This is only used for in-place allocation,
-/// e.g. `let val = in (alloc.make_place().unwrap())`
+/// e.g. `let val = in (alloc.make_place().unwrap()) { EXPR }`
 pub struct Place<'a, T: 'a, A: 'a + Allocator> {
     allocator: &'a A,
     block: Block<'a>,
