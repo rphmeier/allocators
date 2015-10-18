@@ -61,11 +61,13 @@ impl<'a, A: 'a + Allocator> FreeList<'a, A> {
 
 unsafe impl<'a, A: 'a + Allocator> Allocator for FreeList<'a, A> {
     unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
-        debug_assert!(align <= mem::align_of::<*mut u8>(), 
-            "Cannot allocate higher than pointer-width alignment.");
         if size == 0 { return Ok(Block::empty()); }
         else if size > self.block_size {
             return Err(AllocatorError::OutOfMemory);
+        }
+
+        if align > mem::align_of::<*mut u8>() {
+            return Err(AllocatorError::UnsupportedAlignment);
         }
 
         let free_list = self.free_list.get();
@@ -104,6 +106,8 @@ impl<'a, A: 'a + Allocator> Drop for FreeList<'a, A> {
         }        
     }
 }
+
+unsafe impl<'a, A: 'a + Allocator + Send> Send for FreeList<'a, A> {}
 
 #[cfg(test)]
 mod tests {
