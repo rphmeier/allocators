@@ -9,7 +9,7 @@ use super::{Allocator, AllocatorError, Block, HeapAllocator, HEAP};
 pub struct FreeList<'a, A: 'a + Allocator> {
     alloc: &'a A,
     block_size: usize,
-    free_list: Cell<*mut u8>, 
+    free_list: Cell<*mut u8>,
 }
 
 impl FreeList<'static, HeapAllocator> {
@@ -22,8 +22,11 @@ impl FreeList<'static, HeapAllocator> {
 impl<'a, A: 'a + Allocator> FreeList<'a, A> {
     /// Creates a new `FreeList` backed by another allocator. `block_size` must be greater
     /// than or equal to the size of a pointer.
-    pub fn new_from(alloc: &'a A, block_size: usize, num_blocks: usize) -> Result<Self, AllocatorError> {
-        if block_size < mem::size_of::<*mut u8>() { 
+    pub fn new_from(alloc: &'a A,
+                    block_size: usize,
+                    num_blocks: usize)
+                    -> Result<Self, AllocatorError> {
+        if block_size < mem::size_of::<*mut u8>() {
             return Err(AllocatorError::AllocatorSpecific("Block size too small.".into()));
         }
 
@@ -35,7 +38,7 @@ impl<'a, A: 'a + Allocator> FreeList<'a, A> {
             match unsafe { alloc.allocate_raw(block_size, mem::align_of::<*mut u8>()) } {
                 Ok(block) => {
                     let ptr: *mut *mut u8 = block.ptr() as *mut *mut u8;
-                    unsafe { *ptr = free_list };
+                    unsafe { *ptr = free_list }
                     free_list = block.ptr();
                 }
                 Err(err) => {
@@ -54,15 +57,16 @@ impl<'a, A: 'a + Allocator> FreeList<'a, A> {
         Ok(FreeList {
             alloc: alloc,
             block_size: block_size,
-            free_list: Cell::new(free_list)
+            free_list: Cell::new(free_list),
         })
     }
 }
 
 unsafe impl<'a, A: 'a + Allocator> Allocator for FreeList<'a, A> {
     unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
-        if size == 0 { return Ok(Block::empty()); }
-        else if size > self.block_size {
+        if size == 0 {
+            return Ok(Block::empty());
+        } else if size > self.block_size {
             return Err(AllocatorError::OutOfMemory);
         }
 
@@ -98,12 +102,12 @@ impl<'a, A: 'a + Allocator> Drop for FreeList<'a, A> {
         while !free_list.is_null() {
             unsafe {
                 let next = *(free_list as *mut *mut u8);
-                self.alloc.deallocate_raw(
-                    Block::new(free_list, self.block_size, mem::align_of::<*mut u8>())
-                );
+                self.alloc.deallocate_raw(Block::new(free_list,
+                                                     self.block_size,
+                                                     mem::align_of::<*mut u8>()));
                 free_list = next;
             }
-        }        
+        }
     }
 }
 

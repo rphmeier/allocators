@@ -111,7 +111,7 @@ pub unsafe trait Allocator {
     ///     in allocator.make_place().unwrap() { [0; 1000] }
     /// }
     /// ```
-    fn make_place<T>(&self) -> Result<Place<T, Self>, AllocatorError> 
+    fn make_place<T>(&self) -> Result<Place<T, Self>, AllocatorError>
         where Self: Sized
     {
         let (size, align) = (mem::size_of::<T>(), mem::align_of::<T>());
@@ -120,7 +120,7 @@ pub unsafe trait Allocator {
                 Ok(Place {
                     allocator: self,
                     block: blk,
-                    _marker: PhantomData
+                    _marker: PhantomData,
                 })
             }
             Err(e) => Err(e),
@@ -161,7 +161,8 @@ pub trait BlockOwner: Allocator {
     // Right now I've been more focused on shaking out the
     // specifics of allocation than crafting a fluent API.
     fn with_fallback<O: BlockOwner>(self, other: O) -> Fallback<Self, O>
-    where Self: Sized {
+        where Self: Sized
+    {
         Fallback::new(self, other)
     }
 }
@@ -172,7 +173,7 @@ pub struct Block<'a> {
     ptr: *mut u8,
     size: usize,
     align: usize,
-    _marker: PhantomData<&'a [u8]>
+    _marker: PhantomData<&'a [u8]>,
 }
 
 impl<'a> Block<'a> {
@@ -197,11 +198,17 @@ impl<'a> Block<'a> {
     }
 
     /// Get the pointer from this block.
-    pub fn ptr(&self) -> *mut u8 { self.ptr }
+    pub fn ptr(&self) -> *mut u8 {
+        self.ptr
+    }
     /// Get the size of this block.
-    pub fn size(&self) -> usize { self.size }
+    pub fn size(&self) -> usize {
+        self.size
+    }
     /// Get the align of this block.
-    pub fn align(&self) -> usize { self.align }
+    pub fn align(&self) -> usize {
+        self.align
+    }
     /// Whether this block is empty.
     pub fn is_empty(&self) -> bool {
         self.ptr as *mut () == heap::EMPTY || self.size == 0
@@ -258,7 +265,9 @@ pub const HEAP: &'static HeapAllocator = &HeapAllocator;
 unsafe impl Allocator for HeapAllocator {
     #[inline]
     unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
-        if size == 0 { return Ok(Block::empty()) }
+        if size == 0 {
+            return Ok(Block::empty());
+        }
 
         let ptr = heap::allocate(size, align);
         if ptr.is_null() {
@@ -270,7 +279,7 @@ unsafe impl Allocator for HeapAllocator {
 
     #[inline]
     unsafe fn deallocate_raw(&self, blk: Block) {
-        if !blk.is_empty() { 
+        if !blk.is_empty() {
             heap::deallocate(blk.ptr(), blk.size(), blk.align())
         }
     }
@@ -338,8 +347,7 @@ impl<'a, T: ?Sized, A: Allocator> Drop for Allocated<'a, T, A> {
         unsafe {
             drop_in_place(self.item);
 ;
-            self.allocator.deallocate_raw(
-                mem::replace(&mut self.block, Block::empty()));
+            self.allocator.deallocate_raw(mem::replace(&mut self.block, Block::empty()));
         }
 
     }
@@ -356,7 +364,9 @@ pub struct Place<'a, T: 'a, A: 'a + Allocator> {
 
 impl<'a, T: 'a, A: 'a + Allocator> Placer<T> for Place<'a, T, A> {
     type Place = Self;
-    fn make_place(self) -> Self { self }
+    fn make_place(self) -> Self {
+        self
+    }
 }
 
 impl<'a, T: 'a, A: 'a + Allocator> InPlace<T> for Place<'a, T, A> {
@@ -388,8 +398,7 @@ impl<'a, T: 'a, A: 'a + Allocator> Drop for Place<'a, T, A> {
         // to create the value failed, and the memory at the
         // pointer is still uninitialized.
         unsafe {
-            self.allocator.deallocate_raw(
-                mem::replace(&mut self.block, Block::empty()));
+            self.allocator.deallocate_raw(mem::replace(&mut self.block, Block::empty()));
         }
 
     }
@@ -403,7 +412,7 @@ fn align_forward(ptr: *mut u8, align: usize) -> *mut u8 {
 
 #[cfg(test)]
 mod tests {
-        
+
     use std::any::Any;
 
     use super::*;
@@ -412,7 +421,7 @@ mod tests {
     fn heap_lifetime() {
         let my_int;
         {
-            my_int = HEAP.allocate(0i32).unwrap(); 
+            my_int = HEAP.allocate(0i32).unwrap();
         }
 
         assert_eq!(*my_int, 0);

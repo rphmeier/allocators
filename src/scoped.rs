@@ -47,7 +47,7 @@ impl<'parent, A: Allocator> Scoped<'parent, A> {
         where F: FnMut(&Self) -> U
     {
         if self.is_scoped() {
-            return Err(())
+            return Err(());
         }
 
         let mut f = f;
@@ -81,10 +81,12 @@ unsafe impl<'a, A: Allocator> Allocator for Scoped<'a, A> {
         if self.is_scoped() {
             return Err(AllocatorError::AllocatorSpecific("Called allocate on already scoped \
                                                           allocator."
-                                                             .into()))
+                                                             .into()));
         }
 
-        if size == 0 { return Ok(Block::empty()) }
+        if size == 0 {
+            return Ok(Block::empty());
+        }
 
         let current_ptr = self.current.get();
         let aligned_ptr = super::align_forward(current_ptr, align);
@@ -100,7 +102,9 @@ unsafe impl<'a, A: Allocator> Allocator for Scoped<'a, A> {
 
     #[allow(unused_variables)]
     unsafe fn deallocate_raw(&self, blk: Block) {
-        if blk.is_empty() || blk.ptr().is_null() { return }
+        if blk.is_empty() || blk.ptr().is_null() {
+            return;
+        }
         // no op for this unless this is the last allocation.
         // The memory gets reused when the scope is cleared.
         let current_ptr = self.current.get();
@@ -126,10 +130,9 @@ impl<'a, A: Allocator> Drop for Scoped<'a, A> {
         // that memory is freed after destructors for allocated objects
         // are called in case of unwind
         if self.root && size > 0 {
-            unsafe { 
-                self.allocator.deallocate_raw(
-                    Block::new(self.start, size, mem::align_of::<usize>())
-                ) 
+            unsafe {
+                self.allocator
+                    .deallocate_raw(Block::new(self.start, size, mem::align_of::<usize>()))
             }
         }
     }
@@ -190,10 +193,11 @@ mod tests {
         assert!(alloc.owns(&val));
 
         alloc.scope(|inner| {
-            let in_val = inner.allocate(2i32).unwrap();
-            assert!(inner.owns(&in_val));
-            assert!(!inner.owns(&val));
-        }).unwrap();
+                 let in_val = inner.allocate(2i32).unwrap();
+                 assert!(inner.owns(&in_val));
+                 assert!(!inner.owns(&val));
+             })
+             .unwrap();
     }
 
     #[test]

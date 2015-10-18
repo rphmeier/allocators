@@ -48,7 +48,7 @@ unsafe impl<M: BlockOwner, F: BlockOwner> Allocator for Fallback<M, F> {
     unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
         match self.main.allocate_raw(size, align) {
             Ok(blk) => Ok(blk),
-            Err(_) => self.fallback.allocate_raw(size, align)
+            Err(_) => self.fallback.allocate_raw(size, align),
         }
     }
 
@@ -90,7 +90,10 @@ unsafe impl<A: Allocator, W: Write> Allocator for Proxy<A, W> {
         let mut writer = self.writer.borrow_mut();
         match self.alloc.allocate_raw(size, align) {
             Ok(blk) => {
-                writeln!(writer, "Successfully allocated {} bytes with align {}", size, align);
+                writeln!(writer,
+                         "Successfully allocated {} bytes with align {}",
+                         size,
+                         align);
                 writeln!(writer, "Returned pointer is {:p}", blk.ptr());
                 Ok(blk)
             }
@@ -105,8 +108,11 @@ unsafe impl<A: Allocator, W: Write> Allocator for Proxy<A, W> {
     #[allow(unused_must_use)]
     unsafe fn deallocate_raw(&self, blk: Block) {
         let mut writer = self.writer.borrow_mut();
-        write!(writer, "Deallocating block at pointer {:p} with size {} and align {}",
-            blk.ptr(), blk.size(), blk.align());
+        write!(writer,
+               "Deallocating block at pointer {:p} with size {} and align {}",
+               blk.ptr(),
+               blk.size(),
+               blk.align());
         self.alloc.deallocate_raw(blk);
     }
 }
