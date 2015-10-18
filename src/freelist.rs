@@ -1,3 +1,5 @@
+//! A Free List allocator.
+
 use std::cell::Cell;
 use std::mem;
 use std::ptr;

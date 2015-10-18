@@ -5,7 +5,7 @@
 //! #![feature(placement_in_syntax)]
 //!
 //! use std::io;
-//! use allocators::{Allocator, Scoped, BlockOwner, Proxy};
+//! use allocators::{Allocator, Scoped, BlockOwner, FreeList, Proxy};
 //!
 //! #[derive(Debug)]
 //! struct Bomb(u8);
@@ -30,7 +30,7 @@
 //!
 //! // You can make allocators backed by other allocators.
 //! {
-//!     let secondary_alloc = Scoped::new_from(&alloc, 1024).unwrap();
+//!     let secondary_alloc = FreeList::new_from(&alloc, 128, 8).unwrap();
 //!     let mut val = secondary_alloc.allocate(0i32).unwrap();
 //!     *val = 1;
 //! }
@@ -168,7 +168,6 @@ pub trait BlockOwner: Allocator {
 }
 
 /// A block of memory created by an allocator.
-// TODO: should blocks be tied to lifetimes? seems good for safety!
 pub struct Block<'a> {
     ptr: *mut u8,
     size: usize,
