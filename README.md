@@ -9,7 +9,15 @@ This crate provides a different memory allocators, as well as an
 # Why?
 For Rust to fulfill its description as a systems programming language, users need to have more fine-grained control over the way memory is allocated in their programs. This crate is a proof-of-concept that these mechanisms can be implemented in Rust and provide a safe interface to their users.
 
-# Scoped Allocator
+# Allocator Traits
+## Allocator
+This is the core trait for allocators to implement. All a type has to do is implement two unsafe functions: `allocate_raw` and `deallocate_raw`. This will likely require `reallocate_raw` in the future.
+
+## BlockOwner
+Allocators that implement this can say definitively whether they own a block.
+
+# Allocator Types
+## Scoped Allocator
 This is useful for reusing a block of memory for temporary allocations in a tight loop. Scopes can be nested and values allocated in a scope cannot be moved outside it.
 
 ```rust
@@ -34,3 +42,37 @@ alloc.scope(|inner| {
 let my_int = in alloc.make_place().unwrap() { 23 };
 println!("My int: {}", *my_int);
 ```
+
+## Free List Allocator
+This allocator maintains a list of free blocks of a given size.
+```rust
+use allocators::{Allocator, FreeList};
+
+// create a FreeList allocator with 64 blocks of 1024 bytes.
+let alloc = FreeList::new(1024, 64).unwrap();
+for _ in 0..10 {
+    // allocate every block
+    let mut v = Vec::new();
+    for i in 0u8..64 {
+        v.push(alloc.allocate([i; 1024]).unwrap());
+    }
+    // no more blocks :(.
+    assert!(alloc.allocate([0; 1024]).is_err());
+
+    // all the blocks get pushed back onto the freelist at the end here, 
+    // memory gets reused efficiently in the next iteration.
+}
+```
+
+This allocator can yield very good performance for situations like the above, where each block's space is being fully used.
+
+# Composable Primitives
+These are very underdeveloped at the moment, and lack a fluent API as well. They are definitely a back-burner feature at the moment, since the idea of composable allocators hasn't really proved its value yet.
+
+## Null Allocator
+This will probably get a new name since "Null" has some misleading connotations.
+
+It fails to allocate any request made to it, and panics when deallocated with.
+
+## Fallback Allocator
+This composes two `BlockOwners`: a main allocator and a fallback. If the main allocator fails to allocate, it turns to the fallback.
