@@ -113,7 +113,7 @@ impl<'a, A: 'a + Allocator> Drop for FreeList<'a, A> {
     }
 }
 
-unsafe impl<'a, A: 'a + Allocator + Send> Send for FreeList<'a, A> {}
+unsafe impl<'a, A: 'a + Allocator + Sync> Send for FreeList<'a, A> {}
 
 #[cfg(test)]
 mod tests {

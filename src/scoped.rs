@@ -138,7 +138,7 @@ impl<'a, A: Allocator> Drop for Scoped<'a, A> {
     }
 }
 
-unsafe impl<'a, A: 'a + Allocator + Send> Send for Scoped<'a, A> {}
+unsafe impl<'a, A: 'a + Allocator + Sync> Send for Scoped<'a, A> {}
 
 #[cfg(test)]
 mod tests {
