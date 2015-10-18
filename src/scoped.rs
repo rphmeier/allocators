@@ -135,6 +135,8 @@ impl<'a, A: Allocator> Drop for Scoped<'a, A> {
     }
 }
 
+unsafe impl<'a, A: 'a + Allocator + Send> Send for Scoped<'a, A> {}
+
 #[cfg(test)]
 mod tests {
     use super::super::*;
@@ -192,5 +194,20 @@ mod tests {
             assert!(inner.owns(&in_val));
             assert!(!inner.owns(&val));
         }).unwrap();
+    }
+
+    #[test]
+    fn mutex_sharing() {
+        use std::thread;
+        use std::sync::{Arc, Mutex};
+        let alloc = Scoped::new(64).unwrap();
+        let data = Arc::new(Mutex::new(alloc));
+        for i in 0..10 {
+            let data = data.clone();
+            thread::spawn(move || {
+                let alloc_handle = data.lock().unwrap();
+                let _ = alloc_handle.allocate(i).unwrap();
+            });
+        }
     }
 }

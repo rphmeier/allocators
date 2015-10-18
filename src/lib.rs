@@ -83,7 +83,7 @@ pub unsafe trait Allocator {
     ///     allocator.allocate([0; 1000]).ok().unwrap()
     /// }
     /// ```
-    #[inline(always)]
+    #[inline]
     fn allocate<T>(&self, val: T) -> Result<Allocated<T, Self>, (AllocatorError, T)>
         where Self: Sized
     {
@@ -208,23 +208,14 @@ impl<'a> Block<'a> {
     }
 }
 
-impl<'a> Clone for Block<'a> {
-    fn clone(&self) -> Block<'a> {
-        Block {
-            ptr: self.ptr(),
-            size: self.size(),
-            align: self.align(),
-            _marker: self._marker
-        }
-    }
-}
-
 /// Errors that can occur while creating an allocator
 /// or allocating from it.
 #[derive(Debug, Eq, PartialEq)]
 pub enum AllocatorError {
     /// The allocator failed to allocate the amount of memory requested of it.
     OutOfMemory,
+    /// The allocator does not support the requested alignment.
+    UnsupportedAlignment,
     /// An allocator-specific error message.
     AllocatorSpecific(String),
 }
@@ -242,6 +233,9 @@ impl Error for AllocatorError {
         match *self {
             OutOfMemory => {
                 "Allocator out of memory."
+            }
+            UnsupportedAlignment => {
+                "Attempted to allocate with unsupported alignment."
             }
             AllocatorSpecific(ref reason) => {
                 reason
@@ -262,6 +256,7 @@ pub struct HeapAllocator;
 pub const HEAP: &'static HeapAllocator = &HeapAllocator;
 
 unsafe impl Allocator for HeapAllocator {
+    #[inline]
     unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
         if size == 0 { return Ok(Block::empty()) }
 
@@ -273,6 +268,7 @@ unsafe impl Allocator for HeapAllocator {
         }
     }
 
+    #[inline]
     unsafe fn deallocate_raw(&self, blk: Block) {
         if !blk.is_empty() { 
             heap::deallocate(blk.ptr(), blk.size(), blk.align())
@@ -306,14 +302,14 @@ impl<'a, T: ?Sized + Unsize<U>, U: ?Sized, A: Allocator> CoerceUnsized<Allocated
 
 impl<'a, A: Allocator> Allocated<'a, Any, A> {
     /// Attempts to downcast this `Allocated` to a concrete type.
-    pub fn downcast<T: Any>(self) -> Result<Allocated<'a, T, A>, Allocated<'a, Any, A>> {
+    pub fn downcast<T: Any>(mut self) -> Result<Allocated<'a, T, A>, Allocated<'a, Any, A>> {
         use std::raw::TraitObject;
         if self.is::<T>() {
             let obj: TraitObject = unsafe { mem::transmute::<*mut Any, TraitObject>(self.item) };
             let new_allocated = Allocated {
                 item: obj.data as *mut T,
                 allocator: self.allocator,
-                block: self.block.clone(),
+                block: mem::replace(&mut self.block, Block::empty()),
             };
             mem::forget(self);
             Ok(new_allocated)
@@ -342,7 +338,8 @@ impl<'a, T: ?Sized, A: Allocator> Drop for Allocated<'a, T, A> {
         unsafe {
             drop_in_place(self.item);
 ;
-            self.allocator.deallocate_raw(self.block.clone());
+            self.allocator.deallocate_raw(
+                mem::replace(&mut self.block, Block::empty()));
         }
 
     }
@@ -364,11 +361,11 @@ impl<'a, T: 'a, A: 'a + Allocator> Placer<T> for Place<'a, T, A> {
 
 impl<'a, T: 'a, A: 'a + Allocator> InPlace<T> for Place<'a, T, A> {
     type Owner = Allocated<'a, T, A>;
-    unsafe fn finalize(self) -> Self::Owner {
+    unsafe fn finalize(mut self) -> Self::Owner {
         let allocated = Allocated {
             item: self.block.ptr() as *mut T,
             allocator: self.allocator,
-            block: self.block.clone()
+            block: mem::replace(&mut self.block, Block::empty()),
         };
 
         mem::forget(self);
@@ -391,7 +388,8 @@ impl<'a, T: 'a, A: 'a + Allocator> Drop for Place<'a, T, A> {
         // to create the value failed, and the memory at the
         // pointer is still uninitialized.
         unsafe {
-            self.allocator.deallocate_raw(self.block.clone());
+            self.allocator.deallocate_raw(
+                mem::replace(&mut self.block, Block::empty()));
         }
 
     }
@@ -438,4 +436,5 @@ mod tests {
         let my_foo: Allocated<Any, _> = HEAP.allocate(Bomb).unwrap();
         let _: Allocated<Bomb, _> = my_foo.downcast().ok().unwrap();
     }
+
 }
