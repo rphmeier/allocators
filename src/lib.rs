@@ -291,6 +291,17 @@ pub struct Allocated<'a, T: 'a + ?Sized, A: 'a + Allocator> {
     block: Block<'a>,
 }
 
+impl<'a, T, A: Allocator> Allocated<'a, T, A> {
+    /// Consumes this allocated value, yielding the value it manages.
+    pub fn take(mut self) -> T {
+        let val = unsafe { ::std::ptr::read(self.item) };
+        let block = mem::replace(&mut self.block, Block::empty());
+        unsafe { self.allocator.deallocate_raw(block) };
+        mem::forget(self);
+        val
+    }
+}
+
 impl<'a, T: ?Sized, A: Allocator> Deref for Allocated<'a, T, A> {
     type Target = T;
 
@@ -443,6 +454,11 @@ mod tests {
 
         let my_foo: Allocated<Any, _> = HEAP.allocate(Bomb).unwrap();
         let _: Allocated<Bomb, _> = my_foo.downcast().ok().unwrap();
+    }
+
+    #[test]
+    fn take_out() {
+        let _: [u8; 1024] = HEAP.allocate([0; 1024]).ok().unwrap().take();
     }
 
 }
