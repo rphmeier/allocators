@@ -134,22 +134,22 @@ unsafe impl<'a, A: Allocator> Allocator for Scoped<'a, A> {
         }
     }
 
-    unsafe fn deallocate_raw(&self, blk: Block) {
-        if blk.is_empty() || blk.ptr().is_null() {
+    unsafe fn deallocate_raw(&self, block: Block) {
+        if block.is_empty() || block.ptr().is_null() {
             return;
         }
         // no op for this unless this is the last allocation.
         // The memory gets reused when the scope is cleared.
         let current_ptr = self.current.get();
-        if !self.is_scoped() && blk.ptr().offset(blk.size() as isize) == current_ptr {
-            self.current.set(blk.ptr());
+        if !self.is_scoped() && block.ptr().offset(block.size() as isize) == current_ptr {
+            self.current.set(block.ptr());
         }
     }
 }
 
 impl<'a, A: Allocator> BlockOwner for Scoped<'a, A> {
-    fn owns_block(&self, blk: &Block) -> bool {
-        let ptr = blk.ptr();
+    fn owns_block(&self, block: &Block) -> bool {
+        let ptr = block.ptr();
 
         ptr >= self.start && ptr <= self.end
     }

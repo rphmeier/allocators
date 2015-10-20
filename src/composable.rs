@@ -15,17 +15,17 @@ unsafe impl Allocator for NullAllocator {
         Err(AllocatorError::OutOfMemory)
     }
 
-    unsafe fn reallocate_raw<'a>(&'a self, blk: Block<'a>, _new_size: usize) -> Result<Block<'a>, (AllocatorError, Block<'a>)> {
-        Err((AllocatorError::OutOfMemory, blk))
+    unsafe fn reallocate_raw<'a>(&'a self, block: Block<'a>, _new_size: usize) -> Result<Block<'a>, (AllocatorError, Block<'a>)> {
+        Err((AllocatorError::OutOfMemory, block))
     }
 
-    unsafe fn deallocate_raw(&self, _blk: Block) {
+    unsafe fn deallocate_raw(&self, _block: Block) {
         panic!("Attempted to deallocate using null allocator.")
     }
 }
 
 impl BlockOwner for NullAllocator {
-    fn owns_block(&self, _blk: &Block) -> bool {
+    fn owns_block(&self, _block: &Block) -> bool {
         false
     }
 }
@@ -51,33 +51,33 @@ impl<M: BlockOwner, F: BlockOwner> Fallback<M, F> {
 unsafe impl<M: BlockOwner, F: BlockOwner> Allocator for Fallback<M, F> {
     unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
         match self.main.allocate_raw(size, align) {
-            Ok(blk) => Ok(blk),
+            Ok(block) => Ok(block),
             Err(_) => self.fallback.allocate_raw(size, align),
         }
     }
 
-    unsafe fn reallocate_raw<'a>(&'a self, blk: Block<'a>, new_size: usize) -> Result<Block<'a>, (AllocatorError, Block<'a>)> {
-        if self.main.owns_block(&blk) {
-            self.main.reallocate_raw(blk, new_size)
-        } else if self.fallback.owns_block(&blk) {
-            self.fallback.reallocate_raw(blk, new_size)
+    unsafe fn reallocate_raw<'a>(&'a self, block: Block<'a>, new_size: usize) -> Result<Block<'a>, (AllocatorError, Block<'a>)> {
+        if self.main.owns_block(&block) {
+            self.main.reallocate_raw(block, new_size)
+        } else if self.fallback.owns_block(&block) {
+            self.fallback.reallocate_raw(block, new_size)
         } else {
-            Err((AllocatorError::AllocatorSpecific("Neither fallback nor main owns this block.".into()), blk))
+            Err((AllocatorError::AllocatorSpecific("Neither fallback nor main owns this block.".into()), block))
         }
     }
 
-    unsafe fn deallocate_raw(&self, blk: Block) {
-        if self.main.owns_block(&blk) {
-            self.main.deallocate_raw(blk);
-        } else if self.fallback.owns_block(&blk) {
-            self.fallback.deallocate_raw(blk);
+    unsafe fn deallocate_raw(&self, block: Block) {
+        if self.main.owns_block(&block) {
+            self.main.deallocate_raw(block);
+        } else if self.fallback.owns_block(&block) {
+            self.fallback.deallocate_raw(block);
         }
     }
 }
 
 impl<M: BlockOwner, F: BlockOwner> BlockOwner for Fallback<M, F> {
-    fn owns_block(&self, blk: &Block) -> bool {
-        self.main.owns_block(blk) || self.fallback.owns_block(blk)
+    fn owns_block(&self, block: &Block) -> bool {
+        self.main.owns_block(block) || self.fallback.owns_block(block)
     }
 }
 
@@ -103,13 +103,13 @@ unsafe impl<A: Allocator, W: Write> Allocator for Proxy<A, W> {
     unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
         let mut writer = self.writer.borrow_mut();
         match self.alloc.allocate_raw(size, align) {
-            Ok(blk) => {
+            Ok(block) => {
                 writeln!(writer,
                          "Successfully allocated {} bytes with align {}",
                          size,
                          align);
-                writeln!(writer, "Returned pointer is {:p}", blk.ptr());
-                Ok(blk)
+                writeln!(writer, "Returned pointer is {:p}", block.ptr());
+                Ok(block)
             }
             Err(err) => {
                 writeln!(writer, "Failed to allocate {} bytes.", size);
@@ -120,12 +120,12 @@ unsafe impl<A: Allocator, W: Write> Allocator for Proxy<A, W> {
     }
 
     #[allow(unused_must_use)]
-    unsafe fn reallocate_raw<'a>(&'a self, blk: Block<'a>, new_size: usize) -> Result<Block<'a>, (AllocatorError, Block<'a>)> {
+    unsafe fn reallocate_raw<'a>(&'a self, block: Block<'a>, new_size: usize) -> Result<Block<'a>, (AllocatorError, Block<'a>)> {
         let mut writer = self.writer.borrow_mut();
-        let (old_ptr, old_size) = (blk.ptr(), blk.size());
+        let (old_ptr, old_size) = (block.ptr(), block.size());
 
-        match self.alloc.reallocate_raw(blk, new_size) {
-            Ok(new_blk) => {
+        match self.alloc.reallocate_raw(block, new_size) {
+            Ok(new_block) => {
                 writeln!(writer,
                         "Successfully reallocated block at pointer {:p}",
                         old_ptr);
@@ -133,7 +133,7 @@ unsafe impl<A: Allocator, W: Write> Allocator for Proxy<A, W> {
                         "Old size: {}, new size: {}",
                         old_size,
                         new_size);
-                Ok(new_blk)
+                Ok(new_block)
             }
             Err((err, old)) => {
                 writeln!(writer,
@@ -150,14 +150,14 @@ unsafe impl<A: Allocator, W: Write> Allocator for Proxy<A, W> {
     }
 
     #[allow(unused_must_use)]
-    unsafe fn deallocate_raw(&self, blk: Block) {
+    unsafe fn deallocate_raw(&self, block: Block) {
         let mut writer = self.writer.borrow_mut();
         write!(writer,
                "Deallocating block at pointer {:p} with size {} and align {}",
-               blk.ptr(),
-               blk.size(),
-               blk.align());
-        self.alloc.deallocate_raw(blk);
+               block.ptr(),
+               block.size(),
+               block.align());
+        self.alloc.deallocate_raw(block);
     }
 }
 

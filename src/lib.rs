@@ -116,10 +116,10 @@ pub unsafe trait Allocator {
     {
         let (size, align) = (mem::size_of::<T>(), mem::align_of::<T>());
         match unsafe { self.allocate_raw(size, align) } {
-            Ok(blk) => {
+            Ok(block) => {
                 Ok(Place {
                     allocator: self,
-                    block: blk,
+                    block: block,
                     _marker: PhantomData,
                 })
             }
@@ -156,7 +156,7 @@ pub unsafe trait Allocator {
     ///
     /// # Safety
     /// This block must have been allocated by this allocator.
-    unsafe fn deallocate_raw(&self, blk: Block);
+    unsafe fn deallocate_raw(&self, block: Block);
 }
 
 /// An allocator that knows which blocks have been issued by it.
@@ -167,7 +167,7 @@ pub trait BlockOwner: Allocator {
     }
 
     /// Whether this allocator owns the block passed to it.
-    fn owns_block(&self, blk: &Block) -> bool;
+    fn owns_block(&self, block: &Block) -> bool;
 
     /// Joins this allocator with a fallback allocator.
     // TODO: Maybe not the right place for this?
@@ -308,9 +308,9 @@ unsafe impl Allocator for HeapAllocator {
     }
 
     #[inline]
-    unsafe fn deallocate_raw(&self, blk: Block) {
-        if !blk.is_empty() {
-            heap::deallocate(blk.ptr(), blk.size(), blk.align())
+    unsafe fn deallocate_raw(&self, block: Block) {
+        if !block.is_empty() {
+            heap::deallocate(block.ptr(), block.size(), block.align())
         }
     }
 }

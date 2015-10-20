@@ -99,10 +99,10 @@ unsafe impl<'a, A: 'a + Allocator> Allocator for FreeList<'a, A> {
         }
     }
 
-    unsafe fn deallocate_raw(&self, blk: Block) {
-        if !blk.is_empty() {
+    unsafe fn deallocate_raw(&self, block: Block) {
+        if !block.is_empty() {
             let first = self.free_list.get();
-            let ptr = blk.ptr();
+            let ptr = block.ptr();
             *(ptr as *mut *mut u8) = first;
             self.free_list.set(ptr);
         }
