@@ -129,17 +129,30 @@ pub unsafe trait Allocator {
 
     /// Attempt to allocate a block of memory.
     ///
-    /// Returns either a pointer to the block of memory allocated
-    /// or an Error. If `size` is equal to 0, the pointer returned must
-    /// be equal to `heap::EMPTY`
+    /// Returns either a block of memory allocated
+    /// or an Error. If `size` is equal to 0, the block returned must
+    /// be created by `Block::empty()`
     ///
     /// # Safety
-    /// Never use the pointer outside of the lifetime of the allocator.
+    /// Never use the block's pointer outside of the lifetime of the allocator.
     /// It must be deallocated with the same allocator as it was allocated with.
     /// It is undefined behavior to provide a non power-of-two align.
     unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError>;
 
-    /// Deallocate the memory referred to by this pointer.
+    /// Reallocate a block of memory.
+    ///
+    /// This either returns a new, possibly moved block with the requested size,
+    /// or the old block back.
+    /// The new block will have the same alignment as the old.
+    ///
+    /// # Safety
+    /// If given an empty block, it must return it back instead of allocating the new size,
+    /// since the alignment is unknown.
+    ///
+    /// If the requested size is 0, it must deallocate the old block and return an empty one.
+    unsafe fn reallocate_raw<'a>(&'a self, block: Block<'a>, new_size: usize) -> Result<Block<'a>, (AllocatorError, Block<'a>)>;
+
+    /// Deallocate the memory referred to by this block.
     ///
     /// # Safety
     /// This block must have been allocated by this allocator.
@@ -273,6 +286,24 @@ unsafe impl Allocator for HeapAllocator {
             Err(AllocatorError::OutOfMemory)
         } else {
             Ok(Block::new(ptr, size, align))
+        }
+    }
+
+    #[inline]
+    unsafe fn reallocate_raw<'a>(&'a self, block: Block<'a>, new_size: usize) -> Result<Block<'a>, (AllocatorError, Block<'a>)> {
+        if new_size == 0 {
+            self.deallocate_raw(block);
+            Ok(Block::empty())
+        } else if block.is_empty() {
+            Err((AllocatorError::UnsupportedAlignment, block))
+        } else {
+            let new_ptr = heap::reallocate(block.ptr(), block.size(), new_size, block.align());
+
+            if new_ptr.is_null() {
+                Err((AllocatorError::OutOfMemory, block))
+            } else {
+                Ok(Block::new(new_ptr, new_size, block.align()))
+            }
         }
     }
 

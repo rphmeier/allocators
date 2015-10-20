@@ -81,14 +81,26 @@ unsafe impl<'a, A: 'a + Allocator> Allocator for FreeList<'a, A> {
             let next_block = *(free_list as *mut *mut u8);
             self.free_list.set(next_block);
 
-            Ok(Block::new(free_list, self.block_size, align))
+            Ok(Block::new(free_list, size, align))
         } else {
             Err(AllocatorError::OutOfMemory)
         }
     }
 
+    unsafe fn reallocate_raw<'b>(&'b self, block: Block<'b>, new_size: usize) -> Result<Block<'b>, (AllocatorError, Block<'b>)> {
+        if new_size == 0 {
+            Ok(Block::empty())
+        } else if block.is_empty() {
+            Err((AllocatorError::UnsupportedAlignment, block))
+        } else if new_size <= self.block_size {
+            Ok(Block::new(block.ptr(), new_size, block.align()))
+        } else {
+            Err((AllocatorError::OutOfMemory, block))
+        }
+    }
+
     unsafe fn deallocate_raw(&self, blk: Block) {
-        if blk.size() == self.block_size && !blk.ptr().is_null() {
+        if !blk.is_empty() {
             let first = self.free_list.get();
             let ptr = blk.ptr();
             *(ptr as *mut *mut u8) = first;

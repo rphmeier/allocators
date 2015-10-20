@@ -15,6 +15,10 @@ unsafe impl Allocator for NullAllocator {
         Err(AllocatorError::OutOfMemory)
     }
 
+    unsafe fn reallocate_raw<'a>(&'a self, blk: Block<'a>, _new_size: usize) -> Result<Block<'a>, (AllocatorError, Block<'a>)> {
+        Err((AllocatorError::OutOfMemory, blk))
+    }
+
     unsafe fn deallocate_raw(&self, _blk: Block) {
         panic!("Attempted to deallocate using null allocator.")
     }
@@ -49,6 +53,16 @@ unsafe impl<M: BlockOwner, F: BlockOwner> Allocator for Fallback<M, F> {
         match self.main.allocate_raw(size, align) {
             Ok(blk) => Ok(blk),
             Err(_) => self.fallback.allocate_raw(size, align),
+        }
+    }
+
+    unsafe fn reallocate_raw<'a>(&'a self, blk: Block<'a>, new_size: usize) -> Result<Block<'a>, (AllocatorError, Block<'a>)> {
+        if self.main.owns_block(&blk) {
+            self.main.reallocate_raw(blk, new_size)
+        } else if self.fallback.owns_block(&blk) {
+            self.fallback.reallocate_raw(blk, new_size)
+        } else {
+            Err((AllocatorError::AllocatorSpecific("Neither fallback nor main owns this block.".into()), blk))
         }
     }
 
@@ -101,6 +115,36 @@ unsafe impl<A: Allocator, W: Write> Allocator for Proxy<A, W> {
                 writeln!(writer, "Failed to allocate {} bytes.", size);
                 writeln!(writer, "Error: {}", err.description());
                 Err(err)
+            }
+        }
+    }
+
+    #[allow(unused_must_use)]
+    unsafe fn reallocate_raw<'a>(&'a self, blk: Block<'a>, new_size: usize) -> Result<Block<'a>, (AllocatorError, Block<'a>)> {
+        let mut writer = self.writer.borrow_mut();
+        let (old_ptr, old_size) = (blk.ptr(), blk.size());
+
+        match self.alloc.reallocate_raw(blk, new_size) {
+            Ok(new_blk) => {
+                writeln!(writer,
+                        "Successfully reallocated block at pointer {:p}",
+                        old_ptr);
+                writeln!(writer,
+                        "Old size: {}, new size: {}",
+                        old_size,
+                        new_size);
+                Ok(new_blk)
+            }
+            Err((err, old)) => {
+                writeln!(writer,
+                        "Failed to reallocate block at pointer {:p}",
+                        old_ptr);
+                writeln!(writer,
+                        "Old size: {}, new size: {}",
+                        old_size,
+                        new_size);
+                writeln!(writer, "Error: {}", err.description());
+                Err((err, old))
             }
         }
     }

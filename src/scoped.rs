@@ -100,7 +100,40 @@ unsafe impl<'a, A: Allocator> Allocator for Scoped<'a, A> {
         }
     }
 
-    #[allow(unused_variables)]
+    /// Because of the way this allocator is designed, reallocating a block that is not 
+    /// the most recent will lead to fragmentation.
+    unsafe fn reallocate_raw<'b>(&'b self, block: Block<'b>, new_size: usize) -> Result<Block<'b>, (AllocatorError, Block<'b>)> {
+        let current_ptr = self.current.get();
+
+        if new_size == 0 {
+            Ok(Block::empty())
+        } else if block.is_empty() {
+            Err((AllocatorError::UnsupportedAlignment, block))
+        } else if block.ptr().offset(block.size() as isize) == current_ptr {
+            // if this block is the last allocated, resize it if we can.
+            // otherwise, we are out of memory.
+            let new_cur = current_ptr.offset((new_size - block.size()) as isize);
+            if new_cur < self.end {
+                self.current.set(new_cur);
+                Ok(Block::new(block.ptr(), new_size, block.align()))
+            } else {
+                Err((AllocatorError::OutOfMemory, block))
+            }
+        } else {
+            // try to allocate a new block at the end, and copy the old mem over.
+            // this will lead to some fragmentation.
+            match self.allocate_raw(new_size, block.align()) {
+                Ok(new_block) => {
+                    ptr::copy_nonoverlapping(block.ptr(), new_block.ptr(), block.size());
+                    Ok(new_block)
+                }
+                Err(err) => {
+                    Err((err, block))
+                }
+            }
+        }
+    }
+
     unsafe fn deallocate_raw(&self, blk: Block) {
         if blk.is_empty() || blk.ptr().is_null() {
             return;
