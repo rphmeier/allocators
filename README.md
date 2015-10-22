@@ -76,3 +76,6 @@ It fails to allocate any request made to it, and panics when deallocated with.
 
 ## Fallback Allocator
 This composes two `BlockOwners`: a main allocator and a fallback. If the main allocator fails to allocate, it turns to the fallback.
+
+## Proxy Allocator
+This wraps any allocator and something which implements the `ProxyLogger` trait, which provides functions to log allocation, deallocation, and reallocation in any arbitrary way. It has practical applications in debug builds for measuring how an allocator is being utilized.
