@@ -35,9 +35,6 @@
 //!     *val = 1;
 //! }
 //!
-//! // Let's wrap our allocator in a proxy to log what it's doing.
-//! let proxied = Proxy::new(alloc, io::stdout());
-//! let logged_allocation = proxied.allocate([0u8; 32]).unwrap();
 //! ```
 
 #![feature(

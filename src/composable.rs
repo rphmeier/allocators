@@ -1,8 +1,6 @@
 //! This module contains some composable building blocks to build allocator chains.
 
 use std::cell::RefCell;
-use std::error::Error;
-use std::io::Write;
 
 use super::{Allocator, AllocatorError, Block, BlockOwner};
 
@@ -81,82 +79,75 @@ impl<M: BlockOwner, F: BlockOwner> BlockOwner for Fallback<M, F> {
     }
 }
 
-/// This wraps an allocator and a writer, logging all allocations
-/// and deallocations.
-pub struct Proxy<A, W> {
-    alloc: A,
-    writer: RefCell<W>,
+/// Something that logs an allocator's activity.
+/// In practice, this may be an output stream,
+/// a data collector, or seomthing else entirely.
+pub trait ProxyLogger {
+    /// Called after a successful allocation.
+    fn allocate_success(&mut self, block: &Block);
+    /// Called after a failed allocation.
+    fn allocate_fail(&mut self, err: &AllocatorError, size: usize, align: usize);
+
+    /// Called when deallocating a block.
+    fn deallocate(&mut self, block: &Block);
+
+    /// Called after a successful reallocation.
+    fn reallocate_success(&mut self, old_block: &Block, new_block: &Block);
+    /// Called after a failed reallocation.
+    fn reallocate_fail(&mut self, err: &AllocatorError, block: &Block, req_size: usize);
 }
 
-impl<A: Allocator, W: Write> Proxy<A, W> {
+/// This wraps an allocator and a logger, logging all allocations
+/// and deallocations.
+pub struct Proxy<A, L> {
+    alloc: A,
+    logger: RefCell<L>,
+}
+
+impl<A: Allocator, L: ProxyLogger> Proxy<A, L> {
     /// Create a new proxy allocator.
-    pub fn new(alloc: A, writer: W) -> Self {
+    pub fn new(alloc: A, logger: L) -> Self {
         Proxy {
             alloc: alloc,
-            writer: RefCell::new(writer),
+            logger: RefCell::new(logger),
         }
     }
 }
 
-unsafe impl<A: Allocator, W: Write> Allocator for Proxy<A, W> {
-    #[allow(unused_must_use)]
+unsafe impl<A: Allocator, L: ProxyLogger> Allocator for Proxy<A, L> {
     unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
-        let mut writer = self.writer.borrow_mut();
+        let mut logger = self.logger.borrow_mut();
         match self.alloc.allocate_raw(size, align) {
             Ok(block) => {
-                writeln!(writer,
-                         "Successfully allocated {} bytes with align {}",
-                         size,
-                         align);
-                writeln!(writer, "Returned pointer is {:p}", block.ptr());
+                logger.allocate_success(&block);
                 Ok(block)
             }
             Err(err) => {
-                writeln!(writer, "Failed to allocate {} bytes.", size);
-                writeln!(writer, "Error: {}", err.description());
+                logger.allocate_fail(&err, size, align);
                 Err(err)
             }
         }
     }
 
-    #[allow(unused_must_use)]
     unsafe fn reallocate_raw<'a>(&'a self, block: Block<'a>, new_size: usize) -> Result<Block<'a>, (AllocatorError, Block<'a>)> {
-        let mut writer = self.writer.borrow_mut();
-        let (old_ptr, old_size) = (block.ptr(), block.size());
+        let mut logger = self.logger.borrow_mut();
+        let old_copy = Block::new(block.ptr(), block.size(), block.align());
 
         match self.alloc.reallocate_raw(block, new_size) {
             Ok(new_block) => {
-                writeln!(writer,
-                        "Successfully reallocated block at pointer {:p}",
-                        old_ptr);
-                writeln!(writer,
-                        "Old size: {}, new size: {}",
-                        old_size,
-                        new_size);
+                logger.reallocate_success(&old_copy, &new_block);
                 Ok(new_block)
             }
             Err((err, old)) => {
-                writeln!(writer,
-                        "Failed to reallocate block at pointer {:p}",
-                        old_ptr);
-                writeln!(writer,
-                        "Old size: {}, new size: {}",
-                        old_size,
-                        new_size);
-                writeln!(writer, "Error: {}", err.description());
+                logger.reallocate_fail(&err, &old, new_size);
                 Err((err, old))
             }
         }
     }
 
-    #[allow(unused_must_use)]
     unsafe fn deallocate_raw(&self, block: Block) {
-        let mut writer = self.writer.borrow_mut();
-        write!(writer,
-               "Deallocating block at pointer {:p} with size {} and align {}",
-               block.ptr(),
-               block.size(),
-               block.align());
+        let mut logger = self.logger.borrow_mut();
+        logger.deallocate(&block);
         self.alloc.deallocate_raw(block);
     }
 }
