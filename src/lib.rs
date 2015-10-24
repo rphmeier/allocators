@@ -160,7 +160,7 @@ pub unsafe trait Allocator {
 pub trait BlockOwner: Allocator {
     /// Whether this allocator owns this allocated value. 
     fn owns<'a, T, A: Allocator>(&self, val: &Allocated<'a, T, A>) -> bool {
-        self.owns_block(&val.block)
+        self.owns_block(&Block::new(val.item as *mut u8, val.size, val.align))
     }
 
     /// Whether this allocator owns the block passed to it.
@@ -187,6 +187,7 @@ pub struct Block<'a> {
 
 impl<'a> Block<'a> {
     /// Create a new block from the supplied parts.
+    /// The pointer cannot be null.
     pub fn new(ptr: *mut u8, size: usize, align: usize) -> Self {
         Block {
             ptr: ptr,
@@ -220,7 +221,7 @@ impl<'a> Block<'a> {
     }
     /// Whether this block is empty.
     pub fn is_empty(&self) -> bool {
-        self.ptr as *mut () == heap::EMPTY || self.size == 0
+        self.size == 0
     }
 }
 
@@ -274,15 +275,15 @@ pub const HEAP: &'static HeapAllocator = &HeapAllocator;
 unsafe impl Allocator for HeapAllocator {
     #[inline]
     unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
-        if size == 0 {
-            return Ok(Block::empty());
-        }
-
-        let ptr = heap::allocate(size, align);
-        if ptr.is_null() {
-            Err(AllocatorError::OutOfMemory)
+        if size != 0 {
+            let ptr = heap::allocate(size, align);
+            if !ptr.is_null() {
+                Ok(Block::new(ptr, size, align))
+            } else {
+                Err(AllocatorError::OutOfMemory)
+            }
         } else {
-            Ok(Block::new(ptr, size, align))
+            Ok(Block::empty())
         }
     }
 
@@ -315,15 +316,16 @@ unsafe impl Allocator for HeapAllocator {
 /// An item allocated by a custom allocator.
 pub struct Allocated<'a, T: 'a + ?Sized, A: 'a + Allocator> {
     item: *mut T,
+    size: usize,
+    align: usize,
     allocator: &'a A,
-    block: Block<'a>,
 }
 
 impl<'a, T, A: Allocator> Allocated<'a, T, A> {
     /// Consumes this allocated value, yielding the value it manages.
-    pub fn take(mut self) -> T {
+    pub fn take(self) -> T {
         let val = unsafe { ::std::ptr::read(self.item) };
-        let block = mem::replace(&mut self.block, Block::empty());
+        let block = Block::new(self.item as *mut u8, self.size, self.align);
         unsafe { self.allocator.deallocate_raw(block) };
         mem::forget(self);
         val
@@ -349,14 +351,15 @@ impl<'a, T: ?Sized + Unsize<U>, U: ?Sized, A: Allocator> CoerceUnsized<Allocated
 
 impl<'a, A: Allocator> Allocated<'a, Any, A> {
     /// Attempts to downcast this `Allocated` to a concrete type.
-    pub fn downcast<T: Any>(mut self) -> Result<Allocated<'a, T, A>, Allocated<'a, Any, A>> {
+    pub fn downcast<T: Any>(self) -> Result<Allocated<'a, T, A>, Allocated<'a, Any, A>> {
         use std::raw::TraitObject;
         if self.is::<T>() {
             let obj: TraitObject = unsafe { mem::transmute::<*mut Any, TraitObject>(self.item) };
             let new_allocated = Allocated {
                 item: obj.data as *mut T,
+                size: self.size,
+                align: self.align,
                 allocator: self.allocator,
-                block: mem::replace(&mut self.block, Block::empty()),
             };
             mem::forget(self);
             Ok(new_allocated)
@@ -384,8 +387,7 @@ impl<'a, T: ?Sized, A: Allocator> Drop for Allocated<'a, T, A> {
         use std::intrinsics::drop_in_place;
         unsafe {
             drop_in_place(self.item);
-;
-            self.allocator.deallocate_raw(mem::replace(&mut self.block, Block::empty()));
+            self.allocator.deallocate_raw(Block::new(self.item as *mut u8, self.size, self.align));
         }
 
     }
@@ -409,11 +411,12 @@ impl<'a, T: 'a, A: 'a + Allocator> Placer<T> for Place<'a, T, A> {
 
 impl<'a, T: 'a, A: 'a + Allocator> InPlace<T> for Place<'a, T, A> {
     type Owner = Allocated<'a, T, A>;
-    unsafe fn finalize(mut self) -> Self::Owner {
+    unsafe fn finalize(self) -> Self::Owner {
         let allocated = Allocated {
             item: self.block.ptr() as *mut T,
+            size: self.block.size(),
+            align: self.block.align(),
             allocator: self.allocator,
-            block: mem::replace(&mut self.block, Block::empty()),
         };
 
         mem::forget(self);
@@ -431,10 +434,10 @@ impl<'a, T: 'a, A: 'a + Allocator> Drop for Place<'a, T, A> {
     #[inline]
     fn drop(&mut self) {
         // almost identical to Allocated::Drop, but we don't drop
-        // the value in place. This is because if the finalize
-        // method was never called, that means the expression
-        // to create the value failed, and the memory at the
-        // pointer is still uninitialized.
+        // the value in place. If the finalize
+        // method was never called, the expression
+        // to create the value failed and the memory at the
+        // pointer is still uninitialized, which we don't want to drop.
         unsafe {
             self.allocator.deallocate_raw(mem::replace(&mut self.block, Block::empty()));
         }
@@ -443,7 +446,7 @@ impl<'a, T: 'a, A: 'a + Allocator> Drop for Place<'a, T, A> {
 }
 
 // aligns a pointer forward to the next value aligned with `align`.
-#[inline(always)]
+#[inline]
 fn align_forward(ptr: *mut u8, align: usize) -> *mut u8 {
     ((ptr as usize + align - 1) & !(align - 1)) as *mut u8
 }
@@ -488,5 +491,4 @@ mod tests {
     fn take_out() {
         let _: [u8; 1024] = HEAP.allocate([0; 1024]).ok().unwrap().take();
     }
-
 }
