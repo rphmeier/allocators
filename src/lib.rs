@@ -40,7 +40,7 @@
 #![feature(
     alloc,
     coerce_unsized,
-    core_intrinsics,
+    drop_in_place,
     heap_api,
     placement_new_protocol,
     placement_in_syntax,
