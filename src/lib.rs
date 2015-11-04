@@ -45,26 +45,26 @@
     placement_new_protocol,
     placement_in_syntax,
     raw,
+    unique,
     unsize,
 )]
 
-use std::any::Any;
-use std::borrow::{Borrow, BorrowMut};
 use std::error::Error;
 use std::fmt;
-use std::marker::{PhantomData, Unsize};
+use std::marker::PhantomData;
 use std::mem;
-use std::ops::Place as StdPlace;
-use std::ops::{CoerceUnsized, Deref, DerefMut, InPlace, Placer};
+use std::ptr::Unique;
 
 use alloc::heap;
 
 extern crate alloc;
 
+mod boxed;
 pub mod composable;
 pub mod freelist;
 pub mod scoped;
 
+pub use boxed::{AllocBox, Place};
 pub use composable::*;
 pub use freelist::FreeList;
 pub use scoped::Scoped;
@@ -75,13 +75,13 @@ pub unsafe trait Allocator {
     ///
     /// # Examples
     /// ```rust
-    /// use allocators::{Allocator, Allocated};
-    /// fn alloc_array<A: Allocator>(allocator: &A) -> Allocated<[u8; 1000], A> {
+    /// use allocators::{Allocator, AllocBox};
+    /// fn alloc_array<A: Allocator>(allocator: &A) -> AllocBox<[u8; 1000], A> {
     ///     allocator.allocate([0; 1000]).ok().unwrap()
     /// }
     /// ```
     #[inline]
-    fn allocate<T>(&self, val: T) -> Result<Allocated<T, Self>, (AllocatorError, T)>
+    fn allocate<T>(&self, val: T) -> Result<AllocBox<T, Self>, (AllocatorError, T)>
         where Self: Sized
     {
         match self.make_place() {
@@ -102,8 +102,8 @@ pub unsafe trait Allocator {
     /// # Examples
     /// ```rust
     /// #![feature(placement_in_syntax)]
-    /// use allocators::{Allocator, Allocated};
-    /// fn alloc_array<A: Allocator>(allocator: &A) -> Allocated<[u8; 1000], A> {
+    /// use allocators::{Allocator, AllocBox};
+    /// fn alloc_array<A: Allocator>(allocator: &A) -> AllocBox<[u8; 1000], A> {
     ///     // if 1000 bytes were enough to smash the stack, this would still work.
     ///     in allocator.make_place().unwrap() { [0; 1000] }
     /// }
@@ -111,17 +111,7 @@ pub unsafe trait Allocator {
     fn make_place<T>(&self) -> Result<Place<T, Self>, AllocatorError>
         where Self: Sized
     {
-        let (size, align) = (mem::size_of::<T>(), mem::align_of::<T>());
-        match unsafe { self.allocate_raw(size, align) } {
-            Ok(block) => {
-                Ok(Place {
-                    allocator: self,
-                    block: block,
-                    _marker: PhantomData,
-                })
-            }
-            Err(e) => Err(e),
-        }
+        boxed::make_place(self)
     }
 
     /// Attempt to allocate a block of memory.
@@ -159,8 +149,8 @@ pub unsafe trait Allocator {
 /// An allocator that knows which blocks have been issued by it.
 pub trait BlockOwner: Allocator {
     /// Whether this allocator owns this allocated value. 
-    fn owns<'a, T, A: Allocator>(&self, val: &Allocated<'a, T, A>) -> bool {
-        self.owns_block(&Block::new(val.item as *mut u8, val.size, val.align))
+    fn owns<'a, T, A: Allocator>(&self, val: &AllocBox<'a, T, A>) -> bool {
+        self.owns_block(& unsafe { val.as_block() })
     }
 
     /// Whether this allocator owns the block passed to it.
@@ -179,7 +169,7 @@ pub trait BlockOwner: Allocator {
 
 /// A block of memory created by an allocator.
 pub struct Block<'a> {
-    ptr: *mut u8,
+    ptr: Unique<u8>,
     size: usize,
     align: usize,
     _marker: PhantomData<&'a [u8]>,
@@ -188,9 +178,13 @@ pub struct Block<'a> {
 impl<'a> Block<'a> {
     /// Create a new block from the supplied parts.
     /// The pointer cannot be null.
+    ///
+    /// # Panics
+    /// Panics if the pointer passed is null.
     pub fn new(ptr: *mut u8, size: usize, align: usize) -> Self {
+        assert!(!ptr.is_null());
         Block {
-            ptr: ptr,
+            ptr: unsafe { Unique::new(ptr) },
             size: size,
             align: align,
             _marker: PhantomData,
@@ -200,7 +194,7 @@ impl<'a> Block<'a> {
     /// Creates an empty block.
     pub fn empty() -> Self {
         Block {
-            ptr: heap::EMPTY as *mut u8,
+            ptr: unsafe { Unique::new(heap::EMPTY as *mut u8) },
             size: 0,
             align: 0,
             _marker: PhantomData,
@@ -209,7 +203,7 @@ impl<'a> Block<'a> {
 
     /// Get the pointer from this block.
     pub fn ptr(&self) -> *mut u8 {
-        self.ptr
+        *self.ptr
     }
     /// Get the size of this block.
     pub fn size(&self) -> usize {
@@ -313,138 +307,6 @@ unsafe impl Allocator for HeapAllocator {
     }
 }
 
-/// An item allocated by a custom allocator.
-pub struct Allocated<'a, T: 'a + ?Sized, A: 'a + Allocator> {
-    item: *mut T,
-    size: usize,
-    align: usize,
-    allocator: &'a A,
-}
-
-impl<'a, T, A: Allocator> Allocated<'a, T, A> {
-    /// Consumes this allocated value, yielding the value it manages.
-    pub fn take(self) -> T {
-        let val = unsafe { ::std::ptr::read(self.item) };
-        let block = Block::new(self.item as *mut u8, self.size, self.align);
-        unsafe { self.allocator.deallocate_raw(block) };
-        mem::forget(self);
-        val
-    }
-}
-
-impl<'a, T: ?Sized, A: Allocator> Deref for Allocated<'a, T, A> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        unsafe { &*self.item }
-    }
-}
-
-impl<'a, T: ?Sized, A: Allocator> DerefMut for Allocated<'a, T, A> {
-    fn deref_mut(&mut self) -> &mut T {
-        unsafe { &mut *self.item }
-    }
-}
-
-// Allocated can store trait objects!
-impl<'a, T: ?Sized + Unsize<U>, U: ?Sized, A: Allocator> CoerceUnsized<Allocated<'a, U, A>> for Allocated<'a, T, A> {}
-
-impl<'a, A: Allocator> Allocated<'a, Any, A> {
-    /// Attempts to downcast this `Allocated` to a concrete type.
-    pub fn downcast<T: Any>(self) -> Result<Allocated<'a, T, A>, Allocated<'a, Any, A>> {
-        use std::raw::TraitObject;
-        if self.is::<T>() {
-            let obj: TraitObject = unsafe { mem::transmute::<*mut Any, TraitObject>(self.item) };
-            let new_allocated = Allocated {
-                item: obj.data as *mut T,
-                size: self.size,
-                align: self.align,
-                allocator: self.allocator,
-            };
-            mem::forget(self);
-            Ok(new_allocated)
-        } else {
-            Err(self)
-        }
-    }
-}
-
-impl<'a, T: ?Sized, A: Allocator> Borrow<T> for Allocated<'a, T, A> {
-    fn borrow(&self) -> &T {
-        &**self
-    }
-}
-
-impl<'a, T: ?Sized, A: Allocator> BorrowMut<T> for Allocated<'a, T, A> {
-    fn borrow_mut(&mut self) -> &mut T {
-        &mut **self
-    }
-}
-
-impl<'a, T: ?Sized, A: Allocator> Drop for Allocated<'a, T, A> {
-    #[inline]
-    fn drop(&mut self) {
-        use std::intrinsics::drop_in_place;
-        unsafe {
-            drop_in_place(self.item);
-            self.allocator.deallocate_raw(Block::new(self.item as *mut u8, self.size, self.align));
-        }
-
-    }
-}
-
-/// A place for allocating into.
-/// This is only used for in-place allocation,
-/// e.g. `let val = in (alloc.make_place().unwrap()) { EXPR }`
-pub struct Place<'a, T: 'a, A: 'a + Allocator> {
-    allocator: &'a A,
-    block: Block<'a>,
-    _marker: PhantomData<T>,
-}
-
-impl<'a, T: 'a, A: 'a + Allocator> Placer<T> for Place<'a, T, A> {
-    type Place = Self;
-    fn make_place(self) -> Self {
-        self
-    }
-}
-
-impl<'a, T: 'a, A: 'a + Allocator> InPlace<T> for Place<'a, T, A> {
-    type Owner = Allocated<'a, T, A>;
-    unsafe fn finalize(self) -> Self::Owner {
-        let allocated = Allocated {
-            item: self.block.ptr() as *mut T,
-            size: self.block.size(),
-            align: self.block.align(),
-            allocator: self.allocator,
-        };
-
-        mem::forget(self);
-        allocated
-    }
-}
-
-impl<'a, T: 'a, A: 'a + Allocator> StdPlace<T> for Place<'a, T, A> {
-    fn pointer(&mut self) -> *mut T {
-        self.block.ptr() as *mut T
-    }
-}
-
-impl<'a, T: 'a, A: 'a + Allocator> Drop for Place<'a, T, A> {
-    #[inline]
-    fn drop(&mut self) {
-        // almost identical to Allocated::Drop, but we don't drop
-        // the value in place. If the finalize
-        // method was never called, the expression
-        // to create the value failed and the memory at the
-        // pointer is still uninitialized, which we don't want to drop.
-        unsafe {
-            self.allocator.deallocate_raw(mem::replace(&mut self.block, Block::empty()));
-        }
-
-    }
-}
-
 // aligns a pointer forward to the next value aligned with `align`.
 #[inline]
 fn align_forward(ptr: *mut u8, align: usize) -> *mut u8 {
@@ -483,8 +345,8 @@ mod tests {
             }
         }
 
-        let my_foo: Allocated<Any, _> = HEAP.allocate(Bomb).unwrap();
-        let _: Allocated<Bomb, _> = my_foo.downcast().ok().unwrap();
+        let my_foo: AllocBox<Any, _> = HEAP.allocate(Bomb).unwrap();
+        let _: AllocBox<Bomb, _> = my_foo.downcast().ok().unwrap();
     }
 
     #[test]
