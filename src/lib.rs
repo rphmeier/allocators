@@ -52,7 +52,6 @@
 use std::error::Error;
 use std::fmt;
 use std::marker::PhantomData;
-use std::mem;
 use std::ptr::Unique;
 
 use alloc::heap;
@@ -82,7 +81,7 @@ pub unsafe trait Allocator {
     /// ```
     #[inline]
     fn allocate<T>(&self, val: T) -> Result<AllocBox<T, Self>, (AllocatorError, T)>
-        where Self: Sized
+    where Self: Sized
     {
         match self.make_place() {
             Ok(place) => {
@@ -109,11 +108,10 @@ pub unsafe trait Allocator {
     /// }
     /// ```
     fn make_place<T>(&self) -> Result<Place<T, Self>, AllocatorError>
-        where Self: Sized
+    where Self: Sized
     {
         boxed::make_place(self)
     }
-
     /// Attempt to allocate a block of memory.
     ///
     /// Returns either a block of memory allocated
@@ -313,6 +311,50 @@ fn align_forward(ptr: *mut u8, align: usize) -> *mut u8 {
     ((ptr as usize + align - 1) & !(align - 1)) as *mut u8
 }
 
+// implementations for trait object types.
+
+unsafe impl<'a, A: ?Sized + Allocator + 'a> Allocator for Box<A> {
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
+        (**self).allocate_raw(size, align)
+    }
+
+    unsafe fn reallocate_raw<'b>(&'b self, block: Block<'b>, new_size: usize) -> Result<Block<'b>, (AllocatorError, Block<'b>)> {
+        (**self).reallocate_raw(block, new_size)
+    }
+
+    unsafe fn deallocate_raw(&self, block: Block) {
+        (**self).deallocate_raw(block)
+    }
+}
+
+unsafe impl<'a, 'b: 'a, A: ?Sized + Allocator + 'b> Allocator for &'a A {
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
+        (**self).allocate_raw(size, align)
+    }
+
+    unsafe fn reallocate_raw<'c>(&'c self, block: Block<'c>, new_size: usize) -> Result<Block<'c>, (AllocatorError, Block<'c>)> {
+        (**self).reallocate_raw(block, new_size)
+    }
+
+    unsafe fn deallocate_raw(&self, block: Block) {
+        (**self).deallocate_raw(block)
+    }
+}
+
+unsafe impl<'a, 'b: 'a, A: ?Sized + Allocator + 'b> Allocator for &'a mut A {
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
+        (**self).allocate_raw(size, align)
+    }
+
+    unsafe fn reallocate_raw<'c>(&'c self, block: Block<'c>, new_size: usize) -> Result<Block<'c>, (AllocatorError, Block<'c>)> {
+        (**self).reallocate_raw(block, new_size)
+    }
+
+    unsafe fn deallocate_raw(&self, block: Block) {
+        (**self).deallocate_raw(block)
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -352,5 +394,23 @@ mod tests {
     #[test]
     fn take_out() {
         let _: [u8; 1024] = HEAP.allocate([0; 1024]).ok().unwrap().take();
+    }
+
+    #[test]
+    fn boxed_allocator() {
+        #[derive(Debug)]
+        struct Increment<'a>(&'a mut i32);
+        impl<'a> Drop for Increment<'a> {
+            fn drop(&mut self) {
+                *self.0 += 1;
+            }
+        }
+
+        let mut i = 0;
+        let alloc: Box<Allocator> = Box::new(HEAP);
+        {
+            let _ = alloc.allocate(Increment(&mut i)).unwrap();
+        }
+        assert_eq!(i, 1);
     }
 }
