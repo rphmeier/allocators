@@ -1,6 +1,6 @@
 [package]
 name = "allocators"
-version = "0.1.7"
+version = "0.1.8"
 authors = ["rphmeier <rphmeier@gmail.com>"]
 description = "composable memory allocators and utilities for creating more."
 documentation = "https://rphmeier.github.io/allocators/"
