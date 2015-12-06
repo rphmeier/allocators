@@ -6,7 +6,7 @@ use std::ops::{CoerceUnsized, Deref, DerefMut, InPlace, Placer};
 use std::ops::Place as StdPlace;
 use std::ptr::Unique;
 
-use super::{Allocator, AllocatorError, Block};
+use super::{Allocator, Error, Block};
 /// An item allocated by a custom allocator.
 pub struct AllocBox<'a, T: 'a + ?Sized, A: 'a + ?Sized + Allocator> {
     item: Unique<T>,
@@ -93,7 +93,7 @@ impl<'a, T: ?Sized, A: ?Sized + Allocator> Drop for AllocBox<'a, T, A> {
 }
 
 
-pub fn make_place<A: ?Sized + Allocator, T>(alloc: &A) -> Result<Place<T, A>, super::AllocatorError> {
+pub fn make_place<A: ?Sized + Allocator, T>(alloc: &A) -> Result<Place<T, A>, super::Error> {
     let (size, align) = (mem::size_of::<T>(), mem::align_of::<T>());
     match unsafe { alloc.allocate_raw(size, align) } {
         Ok(block) => {

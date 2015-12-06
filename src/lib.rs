@@ -49,7 +49,7 @@
     unsize,
 )]
 
-use std::error::Error;
+use std::error::Error as StdError;
 use std::fmt;
 use std::marker::PhantomData;
 use std::ptr::Unique;
@@ -80,7 +80,7 @@ pub unsafe trait Allocator {
     /// }
     /// ```
     #[inline]
-    fn allocate<T>(&self, val: T) -> Result<AllocBox<T, Self>, (AllocatorError, T)>
+    fn allocate<T>(&self, val: T) -> Result<AllocBox<T, Self>, (Error, T)>
     where Self: Sized
     {
         match self.make_place() {
@@ -107,7 +107,7 @@ pub unsafe trait Allocator {
     ///     in allocator.make_place().unwrap() { [0; 1000] }
     /// }
     /// ```
-    fn make_place<T>(&self) -> Result<Place<T, Self>, AllocatorError>
+    fn make_place<T>(&self) -> Result<Place<T, Self>, Error>
     where Self: Sized
     {
         boxed::make_place(self)
@@ -122,7 +122,7 @@ pub unsafe trait Allocator {
     /// Never use the block's pointer outside of the lifetime of the allocator.
     /// It must be deallocated with the same allocator as it was allocated with.
     /// It is undefined behavior to provide a non power-of-two align.
-    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError>;
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, Error>;
 
     /// Reallocate a block of memory.
     ///
@@ -135,7 +135,7 @@ pub unsafe trait Allocator {
     /// since the alignment is unknown.
     ///
     /// If the requested size is 0, it must deallocate the old block and return an empty one.
-    unsafe fn reallocate_raw<'a>(&'a self, block: Block<'a>, new_size: usize) -> Result<Block<'a>, (AllocatorError, Block<'a>)>;
+    unsafe fn reallocate_raw<'a>(&'a self, block: Block<'a>, new_size: usize) -> Result<Block<'a>, (Error, Block<'a>)>;
 
     /// Deallocate the memory referred to by this block.
     ///
@@ -220,7 +220,7 @@ impl<'a> Block<'a> {
 /// Errors that can occur while creating an allocator
 /// or allocating from it.
 #[derive(Debug, Eq, PartialEq)]
-pub enum AllocatorError {
+pub enum Error {
     /// The allocator failed to allocate the amount of memory requested of it.
     OutOfMemory,
     /// The allocator does not support the requested alignment.
@@ -229,15 +229,15 @@ pub enum AllocatorError {
     AllocatorSpecific(String),
 }
 
-impl fmt::Display for AllocatorError {
+impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         formatter.write_str(self.description())
     }
 }
 
-impl Error for AllocatorError {
+impl StdError for Error {
     fn description(&self) -> &str {
-        use AllocatorError::*;
+        use Error::*;
 
         match *self {
             OutOfMemory => {
@@ -266,13 +266,13 @@ pub const HEAP: &'static HeapAllocator = &HeapAllocator;
 
 unsafe impl Allocator for HeapAllocator {
     #[inline]
-    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, Error> {
         if size != 0 {
             let ptr = heap::allocate(size, align);
             if !ptr.is_null() {
                 Ok(Block::new(ptr, size, align))
             } else {
-                Err(AllocatorError::OutOfMemory)
+                Err(Error::OutOfMemory)
             }
         } else {
             Ok(Block::empty())
@@ -280,17 +280,17 @@ unsafe impl Allocator for HeapAllocator {
     }
 
     #[inline]
-    unsafe fn reallocate_raw<'a>(&'a self, block: Block<'a>, new_size: usize) -> Result<Block<'a>, (AllocatorError, Block<'a>)> {
+    unsafe fn reallocate_raw<'a>(&'a self, block: Block<'a>, new_size: usize) -> Result<Block<'a>, (Error, Block<'a>)> {
         if new_size == 0 {
             self.deallocate_raw(block);
             Ok(Block::empty())
         } else if block.is_empty() {
-            Err((AllocatorError::UnsupportedAlignment, block))
+            Err((Error::UnsupportedAlignment, block))
         } else {
             let new_ptr = heap::reallocate(block.ptr(), block.size(), new_size, block.align());
 
             if new_ptr.is_null() {
-                Err((AllocatorError::OutOfMemory, block))
+                Err((Error::OutOfMemory, block))
             } else {
                 Ok(Block::new(new_ptr, new_size, block.align()))
             }
@@ -314,11 +314,11 @@ fn align_forward(ptr: *mut u8, align: usize) -> *mut u8 {
 // implementations for trait object types.
 
 unsafe impl<'a, A: ?Sized + Allocator + 'a> Allocator for Box<A> {
-    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, Error> {
         (**self).allocate_raw(size, align)
     }
 
-    unsafe fn reallocate_raw<'b>(&'b self, block: Block<'b>, new_size: usize) -> Result<Block<'b>, (AllocatorError, Block<'b>)> {
+    unsafe fn reallocate_raw<'b>(&'b self, block: Block<'b>, new_size: usize) -> Result<Block<'b>, (Error, Block<'b>)> {
         (**self).reallocate_raw(block, new_size)
     }
 
@@ -328,11 +328,11 @@ unsafe impl<'a, A: ?Sized + Allocator + 'a> Allocator for Box<A> {
 }
 
 unsafe impl<'a, 'b: 'a, A: ?Sized + Allocator + 'b> Allocator for &'a A {
-    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, Error> {
         (**self).allocate_raw(size, align)
     }
 
-    unsafe fn reallocate_raw<'c>(&'c self, block: Block<'c>, new_size: usize) -> Result<Block<'c>, (AllocatorError, Block<'c>)> {
+    unsafe fn reallocate_raw<'c>(&'c self, block: Block<'c>, new_size: usize) -> Result<Block<'c>, (Error, Block<'c>)> {
         (**self).reallocate_raw(block, new_size)
     }
 
@@ -342,11 +342,11 @@ unsafe impl<'a, 'b: 'a, A: ?Sized + Allocator + 'b> Allocator for &'a A {
 }
 
 unsafe impl<'a, 'b: 'a, A: ?Sized + Allocator + 'b> Allocator for &'a mut A {
-    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, Error> {
         (**self).allocate_raw(size, align)
     }
 
-    unsafe fn reallocate_raw<'c>(&'c self, block: Block<'c>, new_size: usize) -> Result<Block<'c>, (AllocatorError, Block<'c>)> {
+    unsafe fn reallocate_raw<'c>(&'c self, block: Block<'c>, new_size: usize) -> Result<Block<'c>, (Error, Block<'c>)> {
         (**self).reallocate_raw(block, new_size)
     }
 

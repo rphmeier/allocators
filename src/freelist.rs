@@ -4,7 +4,7 @@ use std::cell::Cell;
 use std::mem;
 use std::ptr;
 
-use super::{Allocator, AllocatorError, Block, HeapAllocator, HEAP};
+use super::{Allocator, Error, Block, HeapAllocator, HEAP};
 
 /// A `FreeList` allocator manages a list of free memory blocks of uniform size.
 /// Whenever a block is requested, it returns the first free block.
@@ -17,7 +17,7 @@ pub struct FreeList<'a, A: 'a + Allocator> {
 impl FreeList<'static, HeapAllocator> {
     /// Creates a new `FreeList` backed by the heap. `block_size` must be greater
     /// than or equal to the size of a pointer.
-    pub fn new(block_size: usize, num_blocks: usize) -> Result<Self, AllocatorError> {
+    pub fn new(block_size: usize, num_blocks: usize) -> Result<Self, Error> {
         FreeList::new_from(HEAP, block_size, num_blocks)
     }
 }
@@ -27,9 +27,9 @@ impl<'a, A: 'a + Allocator> FreeList<'a, A> {
     pub fn new_from(alloc: &'a A,
                     block_size: usize,
                     num_blocks: usize)
-                    -> Result<Self, AllocatorError> {
+                    -> Result<Self, Error> {
         if block_size < mem::size_of::<*mut u8>() {
-            return Err(AllocatorError::AllocatorSpecific("Block size too small.".into()));
+            return Err(Error::AllocatorSpecific("Block size too small.".into()));
         }
 
         let mut free_list = ptr::null_mut();
@@ -65,15 +65,15 @@ impl<'a, A: 'a + Allocator> FreeList<'a, A> {
 }
 
 unsafe impl<'a, A: 'a + Allocator> Allocator for FreeList<'a, A> {
-    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, Error> {
         if size == 0 {
             return Ok(Block::empty());
         } else if size > self.block_size {
-            return Err(AllocatorError::OutOfMemory);
+            return Err(Error::OutOfMemory);
         }
 
         if align > mem::align_of::<*mut u8>() {
-            return Err(AllocatorError::UnsupportedAlignment);
+            return Err(Error::UnsupportedAlignment);
         }
 
         let free_list = self.free_list.get();
@@ -83,19 +83,19 @@ unsafe impl<'a, A: 'a + Allocator> Allocator for FreeList<'a, A> {
 
             Ok(Block::new(free_list, size, align))
         } else {
-            Err(AllocatorError::OutOfMemory)
+            Err(Error::OutOfMemory)
         }
     }
 
-    unsafe fn reallocate_raw<'b>(&'b self, block: Block<'b>, new_size: usize) -> Result<Block<'b>, (AllocatorError, Block<'b>)> {
+    unsafe fn reallocate_raw<'b>(&'b self, block: Block<'b>, new_size: usize) -> Result<Block<'b>, (Error, Block<'b>)> {
         if new_size == 0 {
             Ok(Block::empty())
         } else if block.is_empty() {
-            Err((AllocatorError::UnsupportedAlignment, block))
+            Err((Error::UnsupportedAlignment, block))
         } else if new_size <= self.block_size {
             Ok(Block::new(block.ptr(), new_size, block.align()))
         } else {
-            Err((AllocatorError::OutOfMemory, block))
+            Err((Error::OutOfMemory, block))
         }
     }
 

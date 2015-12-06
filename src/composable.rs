@@ -2,19 +2,19 @@
 
 use std::cell::RefCell;
 
-use super::{Allocator, AllocatorError, Block, BlockOwner};
+use super::{Allocator, Error, Block, BlockOwner};
 
 /// This allocator always fails.
 /// It will panic if you try to deallocate with it.
 pub struct NullAllocator;
 
 unsafe impl Allocator for NullAllocator {
-    unsafe fn allocate_raw(&self, _size: usize, _align: usize) -> Result<Block, AllocatorError> {
-        Err(AllocatorError::OutOfMemory)
+    unsafe fn allocate_raw(&self, _size: usize, _align: usize) -> Result<Block, Error> {
+        Err(Error::OutOfMemory)
     }
 
-    unsafe fn reallocate_raw<'a>(&'a self, block: Block<'a>, _new_size: usize) -> Result<Block<'a>, (AllocatorError, Block<'a>)> {
-        Err((AllocatorError::OutOfMemory, block))
+    unsafe fn reallocate_raw<'a>(&'a self, block: Block<'a>, _new_size: usize) -> Result<Block<'a>, (Error, Block<'a>)> {
+        Err((Error::OutOfMemory, block))
     }
 
     unsafe fn deallocate_raw(&self, _block: Block) {
@@ -47,20 +47,20 @@ impl<M: BlockOwner, F: BlockOwner> Fallback<M, F> {
 }
 
 unsafe impl<M: BlockOwner, F: BlockOwner> Allocator for Fallback<M, F> {
-    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, Error> {
         match self.main.allocate_raw(size, align) {
             Ok(block) => Ok(block),
             Err(_) => self.fallback.allocate_raw(size, align),
         }
     }
 
-    unsafe fn reallocate_raw<'a>(&'a self, block: Block<'a>, new_size: usize) -> Result<Block<'a>, (AllocatorError, Block<'a>)> {
+    unsafe fn reallocate_raw<'a>(&'a self, block: Block<'a>, new_size: usize) -> Result<Block<'a>, (Error, Block<'a>)> {
         if self.main.owns_block(&block) {
             self.main.reallocate_raw(block, new_size)
         } else if self.fallback.owns_block(&block) {
             self.fallback.reallocate_raw(block, new_size)
         } else {
-            Err((AllocatorError::AllocatorSpecific("Neither fallback nor main owns this block.".into()), block))
+            Err((Error::AllocatorSpecific("Neither fallback nor main owns this block.".into()), block))
         }
     }
 
@@ -86,7 +86,7 @@ pub trait ProxyLogger {
     /// Called after a successful allocation.
     fn allocate_success(&mut self, block: &Block);
     /// Called after a failed allocation.
-    fn allocate_fail(&mut self, err: &AllocatorError, size: usize, align: usize);
+    fn allocate_fail(&mut self, err: &Error, size: usize, align: usize);
 
     /// Called when deallocating a block.
     fn deallocate(&mut self, block: &Block);
@@ -94,7 +94,7 @@ pub trait ProxyLogger {
     /// Called after a successful reallocation.
     fn reallocate_success(&mut self, old_block: &Block, new_block: &Block);
     /// Called after a failed reallocation.
-    fn reallocate_fail(&mut self, err: &AllocatorError, block: &Block, req_size: usize);
+    fn reallocate_fail(&mut self, err: &Error, block: &Block, req_size: usize);
 }
 
 /// This wraps an allocator and a logger, logging all allocations
@@ -115,7 +115,7 @@ impl<A: Allocator, L: ProxyLogger> Proxy<A, L> {
 }
 
 unsafe impl<A: Allocator, L: ProxyLogger> Allocator for Proxy<A, L> {
-    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, Error> {
         let mut logger = self.logger.borrow_mut();
         match self.alloc.allocate_raw(size, align) {
             Ok(block) => {
@@ -129,7 +129,7 @@ unsafe impl<A: Allocator, L: ProxyLogger> Allocator for Proxy<A, L> {
         }
     }
 
-    unsafe fn reallocate_raw<'a>(&'a self, block: Block<'a>, new_size: usize) -> Result<Block<'a>, (AllocatorError, Block<'a>)> {
+    unsafe fn reallocate_raw<'a>(&'a self, block: Block<'a>, new_size: usize) -> Result<Block<'a>, (Error, Block<'a>)> {
         let mut logger = self.logger.borrow_mut();
         let old_copy = Block::new(block.ptr(), block.size(), block.align());
 

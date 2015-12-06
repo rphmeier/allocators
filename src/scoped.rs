@@ -5,7 +5,7 @@ use std::cell::Cell;
 use std::mem;
 use std::ptr;
 
-use super::{Allocator, AllocatorError, Block, BlockOwner, HeapAllocator, HEAP};
+use super::{Allocator, Error, Block, BlockOwner, HeapAllocator, HEAP};
 
 /// A scoped linear allocator.
 pub struct Scoped<'parent, A: 'parent + Allocator> {
@@ -18,14 +18,14 @@ pub struct Scoped<'parent, A: 'parent + Allocator> {
 
 impl Scoped<'static, HeapAllocator> {
     /// Creates a new `Scoped` backed by `size` bytes from the heap.
-    pub fn new(size: usize) -> Result<Self, AllocatorError> {
+    pub fn new(size: usize) -> Result<Self, Error> {
         Scoped::new_from(HEAP, size)
     }
 }
 
 impl<'parent, A: Allocator> Scoped<'parent, A> {
     /// Creates a new `Scoped` backed by `size` bytes from the allocator supplied.
-    pub fn new_from(alloc: &'parent A, size: usize) -> Result<Self, AllocatorError> {
+    pub fn new_from(alloc: &'parent A, size: usize) -> Result<Self, Error> {
         // Create a memory buffer with the desired size and maximal align from the parent.
         match unsafe { alloc.allocate_raw(size, mem::align_of::<usize>()) } {
             Ok(block) => Ok(Scoped {
@@ -77,9 +77,9 @@ impl<'parent, A: Allocator> Scoped<'parent, A> {
 }
 
 unsafe impl<'a, A: Allocator> Allocator for Scoped<'a, A> {
-    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, AllocatorError> {
+    unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, Error> {
         if self.is_scoped() {
-            return Err(AllocatorError::AllocatorSpecific("Called allocate on already scoped \
+            return Err(Error::AllocatorSpecific("Called allocate on already scoped \
                                                           allocator."
                                                              .into()));
         }
@@ -93,7 +93,7 @@ unsafe impl<'a, A: Allocator> Allocator for Scoped<'a, A> {
         let end_ptr = aligned_ptr.offset(size as isize);
 
         if end_ptr > self.end {
-            Err(AllocatorError::OutOfMemory)
+            Err(Error::OutOfMemory)
         } else {
             self.current.set(end_ptr);
             Ok(Block::new(aligned_ptr, size, align))
@@ -102,13 +102,13 @@ unsafe impl<'a, A: Allocator> Allocator for Scoped<'a, A> {
 
     /// Because of the way this allocator is designed, reallocating a block that is not 
     /// the most recent will lead to fragmentation.
-    unsafe fn reallocate_raw<'b>(&'b self, block: Block<'b>, new_size: usize) -> Result<Block<'b>, (AllocatorError, Block<'b>)> {
+    unsafe fn reallocate_raw<'b>(&'b self, block: Block<'b>, new_size: usize) -> Result<Block<'b>, (Error, Block<'b>)> {
         let current_ptr = self.current.get();
 
         if new_size == 0 {
             Ok(Block::empty())
         } else if block.is_empty() {
-            Err((AllocatorError::UnsupportedAlignment, block))
+            Err((Error::UnsupportedAlignment, block))
         } else if block.ptr().offset(block.size() as isize) == current_ptr {
             // if this block is the last allocated, resize it if we can.
             // otherwise, we are out of memory.
@@ -117,7 +117,7 @@ unsafe impl<'a, A: Allocator> Allocator for Scoped<'a, A> {
                 self.current.set(new_cur);
                 Ok(Block::new(block.ptr(), new_size, block.align()))
             } else {
-                Err((AllocatorError::OutOfMemory, block))
+                Err((Error::OutOfMemory, block))
             }
         } else {
             // try to allocate a new block at the end, and copy the old mem over.
@@ -208,7 +208,7 @@ mod tests {
         // allocate more memory than the allocator has.
         let alloc = Scoped::new(0).unwrap();
         let (err, _) = alloc.allocate(1i32).err().unwrap();
-        assert_eq!(err, AllocatorError::OutOfMemory);
+        assert_eq!(err, Error::OutOfMemory);
     }
 
     #[test]
