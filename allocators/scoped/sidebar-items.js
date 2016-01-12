@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["Scoped","A scoped linear allocator."]]});

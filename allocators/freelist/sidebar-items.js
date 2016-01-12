@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["FreeList","A `FreeList` allocator manages a list of free memory blocks of uniform size. Whenever a block is requested, it returns the first free block."]]});

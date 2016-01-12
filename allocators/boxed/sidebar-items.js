@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["AllocBox","An item allocated by a custom allocator."],["Place","A place for allocating into. This is only used for in-place allocation, e.g. `let val = in (alloc.make_place().unwrap()) { EXPR }`"]]});
