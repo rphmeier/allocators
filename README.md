@@ -3,11 +3,12 @@
 
 ## [Documentation](https://rphmeier.github.io/allocators/allocators/)
 
-This crate provides a different memory allocators, as well as an 
-`Allocator` trait for creating other custom allocators. A main goal of allocators is composability. For this reason, it also provides some composable primitives to be used as building blocks for chained allocators. This crate leans heavily on unsafe/unstable code at the moment, and should be considered very experimental. 
+This crate provides a few different memory allocators, as well as an 
+`Allocator` trait for creating other custom allocators. A main goal of allocators is composability. For this reason, it also provides some composable primitives to be used as building blocks for chained allocators. This crate leans heavily on unsafe/unstable code at the moment, and should be considered very experimental.
+In light of [RFC 1398 (Allocators, Take III)](https://github.com/rust-lang/rfcs/pull/1398), this crate has been made more or less obsolete in its current state, and will probably be revised to contain instead a collection of custom allocators without providing the framework.
 
 # Why?
-For Rust to fulfill its description as a systems programming language, users need to have more fine-grained control over the way memory is allocated in their programs. This crate is a proof-of-concept that these mechanisms can be implemented in Rust and provide a safe interface to their users.
+Users often need to have more fine-grained control over the way memory is allocated in their programs. This crate is a proof-of-concept that these mechanisms can be implemented in Rust and provide a safe interface to their users.
 
 # Allocator Traits
 ## Allocator
