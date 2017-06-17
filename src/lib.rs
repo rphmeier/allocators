@@ -201,7 +201,7 @@ impl<'a> Block<'a> {
 
     /// Get the pointer from this block.
     pub fn ptr(&self) -> *mut u8 {
-        *self.ptr
+        self.ptr.as_ptr()
     }
     /// Get the size of this block.
     pub fn size(&self) -> usize {
