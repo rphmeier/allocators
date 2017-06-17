@@ -18,8 +18,8 @@ pub struct AllocBox<'a, T: 'a + ?Sized, A: 'a + ?Sized + Allocator> {
 impl<'a, T: ?Sized, A: ?Sized + Allocator> AllocBox<'a, T, A> {
     /// Consumes this allocated value, yielding the value it manages.
     pub fn take(self) -> T where T: Sized {
-        let val = unsafe { ::std::ptr::read(*self.item) };
-        let block = Block::new(*self.item as *mut u8, self.size, self.align);
+        let val = unsafe { ::std::ptr::read(self.item.as_ptr()) };
+        let block = Block::new(self.item.as_ptr() as *mut u8, self.size, self.align);
         unsafe { self.allocator.deallocate_raw(block) };
         mem::forget(self);
         val
@@ -27,7 +27,7 @@ impl<'a, T: ?Sized, A: ?Sized + Allocator> AllocBox<'a, T, A> {
 
     /// Gets a handle to the block of memory this manages.
     pub unsafe fn as_block(&self) -> Block {
-        Block::new(*self.item as *mut u8, self.size, self.align)
+        Block::new(self.item.as_ptr() as *mut u8, self.size, self.align)
     }
 }
 
@@ -35,13 +35,13 @@ impl<'a, T: ?Sized, A: ?Sized + Allocator> Deref for AllocBox<'a, T, A> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        unsafe { self.item.get() }
+        unsafe { self.item.as_ref() }
     }
 }
 
 impl<'a, T: ?Sized, A: ?Sized + Allocator> DerefMut for AllocBox<'a, T, A> {
     fn deref_mut(&mut self) -> &mut T {
-        unsafe { self.item.get_mut() }
+        unsafe { self.item.as_mut() }
     }
 }
 
@@ -53,7 +53,7 @@ impl<'a, A: ?Sized + Allocator> AllocBox<'a, Any, A> {
     pub fn downcast<T: Any>(self) -> Result<AllocBox<'a, T, A>, AllocBox<'a, Any, A>> {
         use std::raw::TraitObject;
         if self.is::<T>() {
-            let obj: TraitObject = unsafe { mem::transmute::<*mut Any, TraitObject>(*self.item) };
+            let obj: TraitObject = unsafe { mem::transmute::<*mut Any, TraitObject>(self.item.as_ptr()) };
             let new_allocated = AllocBox {
                 item: unsafe { Unique::new(obj.data as *mut T) },
                 size: self.size,
@@ -85,8 +85,8 @@ impl<'a, T: ?Sized, A: ?Sized + Allocator> Drop for AllocBox<'a, T, A> {
     fn drop(&mut self) {
         use std::intrinsics::drop_in_place;
         unsafe {
-            drop_in_place(*self.item);
-            self.allocator.deallocate_raw(Block::new(*self.item as *mut u8, self.size, self.align));
+            drop_in_place(self.item.as_ptr());
+            self.allocator.deallocate_raw(Block::new(self.item.as_ptr() as *mut u8, self.size, self.align));
         }
 
     }
