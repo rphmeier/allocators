@@ -1,7 +1,5 @@
 //! This module contains some composable building blocks to build allocator chains.
 
-use std::cell::RefCell;
-
 use super::{Allocator, Error, Block, BlockOwner};
 
 /// This allocator always fails.
@@ -84,24 +82,24 @@ impl<M: BlockOwner, F: BlockOwner> BlockOwner for Fallback<M, F> {
 /// a data collector, or seomthing else entirely.
 pub trait ProxyLogger {
     /// Called after a successful allocation.
-    fn allocate_success(&mut self, block: &Block);
+    fn allocate_success(&self, block: &Block);
     /// Called after a failed allocation.
-    fn allocate_fail(&mut self, err: &Error, size: usize, align: usize);
+    fn allocate_fail(&self, err: &Error, size: usize, align: usize);
 
     /// Called when deallocating a block.
-    fn deallocate(&mut self, block: &Block);
+    fn deallocate(&self, block: &Block);
 
     /// Called after a successful reallocation.
-    fn reallocate_success(&mut self, old_block: &Block, new_block: &Block);
+    fn reallocate_success(&self, old_block: &Block, new_block: &Block);
     /// Called after a failed reallocation.
-    fn reallocate_fail(&mut self, err: &Error, block: &Block, req_size: usize);
+    fn reallocate_fail(&self, err: &Error, block: &Block, req_size: usize);
 }
 
 /// This wraps an allocator and a logger, logging all allocations
 /// and deallocations.
 pub struct Proxy<A, L> {
     alloc: A,
-    logger: RefCell<L>,
+    logger: L,
 }
 
 impl<A: Allocator, L: ProxyLogger> Proxy<A, L> {
@@ -109,45 +107,42 @@ impl<A: Allocator, L: ProxyLogger> Proxy<A, L> {
     pub fn new(alloc: A, logger: L) -> Self {
         Proxy {
             alloc: alloc,
-            logger: RefCell::new(logger),
+            logger: logger,
         }
     }
 }
 
 unsafe impl<A: Allocator, L: ProxyLogger> Allocator for Proxy<A, L> {
     unsafe fn allocate_raw(&self, size: usize, align: usize) -> Result<Block, Error> {
-        let mut logger = self.logger.borrow_mut();
         match self.alloc.allocate_raw(size, align) {
             Ok(block) => {
-                logger.allocate_success(&block);
+                self.logger.allocate_success(&block);
                 Ok(block)
             }
             Err(err) => {
-                logger.allocate_fail(&err, size, align);
+                self.logger.allocate_fail(&err, size, align);
                 Err(err)
             }
         }
     }
 
     unsafe fn reallocate_raw<'a>(&'a self, block: Block<'a>, new_size: usize) -> Result<Block<'a>, (Error, Block<'a>)> {
-        let mut logger = self.logger.borrow_mut();
         let old_copy = Block::new(block.ptr(), block.size(), block.align());
 
         match self.alloc.reallocate_raw(block, new_size) {
             Ok(new_block) => {
-                logger.reallocate_success(&old_copy, &new_block);
+                self.logger.reallocate_success(&old_copy, &new_block);
                 Ok(new_block)
             }
             Err((err, old)) => {
-                logger.reallocate_fail(&err, &old, new_size);
+                self.logger.reallocate_fail(&err, &old, new_size);
                 Err((err, old))
             }
         }
     }
 
     unsafe fn deallocate_raw(&self, block: Block) {
-        let mut logger = self.logger.borrow_mut();
-        logger.deallocate(&block);
+        self.logger.deallocate(&block);
         self.alloc.deallocate_raw(block);
     }
 }

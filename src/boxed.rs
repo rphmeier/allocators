@@ -6,7 +6,8 @@ use std::ops::{CoerceUnsized, Deref, DerefMut, InPlace, Placer};
 use std::ops::Place as StdPlace;
 use std::ptr::Unique;
 
-use super::{Allocator, Error, Block};
+use super::{Allocator, Block};
+
 /// An item allocated by a custom allocator.
 pub struct AllocBox<'a, T: 'a + ?Sized, A: 'a + ?Sized + Allocator> {
     item: Unique<T>,

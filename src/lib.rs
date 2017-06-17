@@ -40,7 +40,6 @@
 #![feature(
     alloc,
     coerce_unsized,
-    drop_in_place,
     heap_api,
     placement_new_protocol,
     placement_in_syntax,
@@ -112,6 +111,7 @@ pub unsafe trait Allocator {
     {
         boxed::make_place(self)
     }
+    
     /// Attempt to allocate a block of memory.
     ///
     /// Returns either a block of memory allocated
@@ -192,7 +192,7 @@ impl<'a> Block<'a> {
     /// Creates an empty block.
     pub fn empty() -> Self {
         Block {
-            ptr: unsafe { Unique::new(heap::EMPTY as *mut u8) },
+            ptr: Unique::empty(),
             size: 0,
             align: 0,
             _marker: PhantomData,
